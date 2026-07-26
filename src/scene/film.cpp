@@ -127,6 +127,9 @@ NODE_DEFINE(Film)
   SOCKET_BOOLEAN(denoising_pass_use_albedo_roughness_weighting,
                  "Denoising Pass Albedo Roughness Weighting",
                  true);
+  /* Deep EXR output. */
+  SOCKET_BOOLEAN(use_deep_output, "Use Deep Output", false);
+  SOCKET_INT(deep_max_samples, "Deep Max Samples", 64);
 
   return type;
 }
@@ -475,6 +478,13 @@ void Film::device_update(Device *device, DeviceScene *dscene, Scene *scene)
   if (denoising_pass_use_albedo_roughness_weighting) {
     kfilm->denoising_pass_options_flag |= DENOISING_PASS_USE_ALBEDO_ROUGHNESS_WEIGHTING;
   }
+  /* Deep output settings. */
+  kfilm->use_deep_output = use_deep_output;
+  kfilm->deep_max_samples = deep_max_samples;
+  kfilm->deep_width = deep_width_;
+  kfilm->deep_height = deep_height_;
+  kfilm->deep_samples_ptr = deep_samples_ptr_;
+  kfilm->deep_sample_counts_ptr = deep_sample_counts_ptr_;
 
   clear_modified();
 }

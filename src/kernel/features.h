@@ -146,6 +146,9 @@ CCL_NAMESPACE_BEGIN
 #define __VISIBILITY_FLAG__
 #define __SVM__
 
+/* Deep EXR output - accumulates per-pixel samples with depth. */
+#define __DEEP_OUTPUT__
+
 /* Device specific features */
 
 #ifdef WITH_OSL
