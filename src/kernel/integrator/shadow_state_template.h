@@ -71,6 +71,8 @@ KERNEL_STRUCT_MEMBER(shadow_path,
                      float,
                      bsdf_eval_average,
                      KernelFeatureRequest(KERNEL_FEATURE_PATH_TRACING, KERNEL_FEATURE_LIGHT_TREE))
+/* Deep output: the deep sample of the path this shadow ray belongs to. */
+KERNEL_STRUCT_MEMBER(shadow_path, uint32_t, deep_slot, KERNEL_FEATURE_PATH_TRACING)
 KERNEL_STRUCT_END(shadow_path)
 
 /********************************** Shadow Ray *******************************/
