@@ -157,8 +157,8 @@ KERNEL_STRUCT_MEMBER(film, int, use_deep_output)
 KERNEL_STRUCT_MEMBER(film, int, deep_max_samples)
 KERNEL_STRUCT_MEMBER(film, int, deep_width)
 KERNEL_STRUCT_MEMBER(film, int, deep_height)
-/* Padding. */
-KERNEL_STRUCT_MEMBER(film, int, pad1)
+/* Deep hidden layers: camera rays pass through their first deep_peel objects (shade_surface.h). */
+KERNEL_STRUCT_MEMBER(film, int, deep_peel)
 KERNEL_STRUCT_MEMBER_DONT_SPECIALIZE
 KERNEL_STRUCT_MEMBER(film, uint64_t, deep_samples_ptr)
 KERNEL_STRUCT_MEMBER_DONT_SPECIALIZE
