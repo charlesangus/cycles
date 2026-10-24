@@ -159,6 +159,12 @@ KERNEL_STRUCT_MEMBER(film, int, deep_width)
 KERNEL_STRUCT_MEMBER(film, int, deep_height)
 /* Deep hidden layers: camera rays pass through their first deep_peel objects (shade_surface.h). */
 KERNEL_STRUCT_MEMBER(film, int, deep_peel)
+/* Paths hitting within this depth of a pixel's deep sample add into it (kernel/film/deep_write.h). */
+KERNEL_STRUCT_MEMBER(film, float, deep_merge_threshold)
+/* Padding: keeps the 64-bit pointers below 8-byte aligned and KernelFilm a multiple of 16. */
+KERNEL_STRUCT_MEMBER(film, int, deep_pad1)
+KERNEL_STRUCT_MEMBER(film, int, deep_pad2)
+KERNEL_STRUCT_MEMBER(film, int, deep_pad3)
 KERNEL_STRUCT_MEMBER_DONT_SPECIALIZE
 KERNEL_STRUCT_MEMBER(film, uint64_t, deep_samples_ptr)
 KERNEL_STRUCT_MEMBER_DONT_SPECIALIZE
