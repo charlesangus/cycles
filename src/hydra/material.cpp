@@ -13,7 +13,9 @@
 #include "scene/shader_nodes.h"
 
 #include <algorithm>
+#include <cmath>
 #include <iterator>
+#include <unordered_set>
 
 #include <pxr/base/gf/vec4f.h>
 #include <pxr/imaging/hd/material.h>
@@ -65,6 +67,8 @@ TF_DEFINE_PRIVATE_TOKENS(CyclesMaterialTokens,
     (wrapT)
     (scale)
     (bias)
+    (opacity)
+    (opacityThreshold)
     (periodic)
 );
 // clang-format on
@@ -73,11 +77,18 @@ TF_DEFINE_PRIVATE_TOKENS(CyclesMaterialTokens,
  * equivalents. */
 class UsdToCyclesMapping {
   using ParamMap = std::unordered_map<TfToken, ustring, TfToken::HashFunctor>;
+  using IgnoredSet = std::unordered_set<TfToken, TfToken::HashFunctor>;
 
  public:
-  UsdToCyclesMapping(const char *nodeType, ParamMap paramMap)
-      : _nodeType(nodeType), _paramMap(std::move(paramMap))
+  UsdToCyclesMapping(const char *nodeType, ParamMap paramMap, IgnoredSet ignored = {})
+      : _nodeType(nodeType), _paramMap(std::move(paramMap)), _ignored(std::move(ignored))
   {
+  }
+
+  /* Inputs with no Cycles counterpart, dropped without a warning. */
+  bool isIgnored(const TfToken &name) const
+  {
+    return _ignored.count(name) != 0;
   }
 
   ustring nodeType() const
@@ -130,6 +141,7 @@ class UsdToCyclesMapping {
  private:
   const ustring _nodeType;
   ParamMap _paramMap;
+  IgnoredSet _ignored;
 };
 
 class UsdToCyclesTexture : public UsdToCyclesMapping {
@@ -204,14 +216,18 @@ class UsdToCycles {
       "principled_bsdf",
       {
           {TfToken("diffuseColor"), ustring("base_color")},
-          {TfToken("emissiveColor"), ustring("emission")},
-          {TfToken("specularColor"), ustring("specular")},
+          {TfToken("emissiveColor"), ustring("emission_color")},
+          {TfToken("clearcoat"), ustring("coat_weight")},
+          {TfToken("clearcoatColor"), ustring("coat_tint")},
           {TfToken("clearcoatRoughness"), ustring("coat_roughness")},
           {TfToken("opacity"), ustring("alpha")},
-          /* opacityThreshold */
-          /* occlusion */
-          /* displacement */
-      }};
+      },
+      /* Principled has no F0 input to drive a specular workflow with, a path tracer computes
+       * occlusion itself, and a displacement input would need tessellation to displace. */
+      {TfToken("useSpecularWorkflow"),
+       TfToken("specularColor"),
+       TfToken("occlusion"),
+       TfToken("displacement")}};
   const UsdToCyclesTexture UsdUVTexture = {
       "image_texture",
       {
@@ -220,9 +236,10 @@ class UsdToCycles {
           {CyclesMaterialTokens->wrapT, ustring("extension")},
           {TfToken("file"), ustring("filename")},
           {TfToken("sourceColorSpace"), ustring("colorspace")},
-      }};
-  const UsdToCyclesMapping UsdPrimvarReader = {"attribute",
-                                               {{TfToken("varname"), ustring("attribute")}}};
+      },
+      {TfToken("fallback")}};
+  const UsdToCyclesMapping UsdPrimvarReader = {
+      "attribute", {{TfToken("varname"), ustring("attribute")}}, {TfToken("fallback")}};
 
  public:
   const UsdToCyclesMapping *findUsd(const TfToken &usdNodeType)
@@ -317,11 +334,25 @@ void HdCyclesMaterial::Sync(HdSceneDelegate *sceneDelegate,
 }
 
 bool HdCyclesMaterial::UpdateParameters(NodeDesc &nodeDesc,
-                                         HdMaterialNodeParameterContainerSchema params,
-                                         const SdfPath &nodePath)
+                                        HdMaterialNodeParameterContainerSchema params,
+                                        const SdfPath &nodePath)
 {
   bool rebuild = false;
   const bool isTexture = nodeDesc.mapping && nodeDesc.mapping->nodeType() == "image_texture";
+  const bool isSurface = nodeDesc.mapping && nodeDesc.mapping->nodeType() == "principled_bsdf";
+
+  /* Read first: opacity may be visited before the threshold that decides how it is applied. */
+  if (isSurface) {
+    float threshold = 0.0f;
+    if (auto thresholdDs = params.Get(CyclesMaterialTokens->opacityThreshold).GetValue()) {
+      VtValue v = VtValue::Cast<float>(thresholdDs->GetValue(0.0f));
+      if (v.IsHolding<float>()) {
+        threshold = v.UncheckedGet<float>();
+      }
+    }
+    rebuild |= nodeDesc.opacityThreshold != threshold;
+    nodeDesc.opacityThreshold = threshold;
+  }
 
   for (const TfToken &paramName : params.GetNames()) {
     auto valueDs = params.Get(paramName).GetValue();
@@ -329,6 +360,20 @@ bool HdCyclesMaterial::UpdateParameters(NodeDesc &nodeDesc,
       continue;
     }
     VtValue value = valueDs->GetValue(0.0f);
+
+    if (isSurface && paramName == CyclesMaterialTokens->opacityThreshold) {
+      continue;
+    }
+
+    /* A cutout is fully opaque where opacity reaches the threshold, and absent elsewhere. */
+    if (isSurface && paramName == CyclesMaterialTokens->opacity &&
+        nodeDesc.opacityThreshold > 0.0f)
+    {
+      value = VtValue::Cast<float>(value);
+      if (value.IsHolding<float>()) {
+        value = VtValue(value.UncheckedGet<float>() >= nodeDesc.opacityThreshold ? 1.0f : 0.0f);
+      }
+    }
 
     if (isTexture &&
         (paramName == CyclesMaterialTokens->scale || paramName == CyclesMaterialTokens->bias))
@@ -361,6 +406,9 @@ bool HdCyclesMaterial::UpdateParameters(NodeDesc &nodeDesc,
     }
 
     if (!input) {
+      if (inputMapping && inputMapping->isIgnored(paramName)) {
+        continue;
+      }
       TF_WARN("Could not find parameter '%s' on node '%s' ('%s')",
               paramName.GetText(),
               nodePath.GetText(),
@@ -421,6 +469,9 @@ void HdCyclesMaterial::UpdateConnections(NodeDesc &nodeDesc,
     }
 
     if (!input) {
+      if (inputMapping && inputMapping->isIgnored(dstSocketName)) {
+        continue;
+      }
       TF_WARN("Ignoring connection on '%s.%s', input '%s' was not found",
               nodePath.GetText(),
               dstSocketName.GetText(),
@@ -508,6 +559,16 @@ void HdCyclesMaterial::UpdateConnections(NodeDesc &nodeDesc,
       source = normalMap->output("Normal");
     }
 
+    if (nodeDesc.opacityThreshold > 0.0f && input->socket_type.name == ustring("alpha")) {
+      /* The largest float below the threshold, so that a greater-than test keeps opacity equal to
+       * it. */
+      MathNode *cutout = shaderGraph->create_node<MathNode>();
+      cutout->set_math_type(NODE_MATH_GREATER_THAN);
+      cutout->set_value2(std::nextafter(nodeDesc.opacityThreshold, 0.0f));
+      shaderGraph->connect(source, cutout->input("Value1"));
+      source = cutout->output("Value");
+    }
+
     shaderGraph->connect(source, input);
   }
 }
@@ -569,6 +630,13 @@ void HdCyclesMaterial::PopulateShaderGraph(HdMaterialNetworkSchema network)
       /* If it's a native Cycles' node-type, just do the lookup now. */
       if (const NodeType *nodeType = NodeType::find(cyclesType)) {
         nodeDesc.node = graph->create_node(nodeType);
+        if (nodeDesc.mapping && cyclesType == "principled_bsdf") {
+          /* Cycles emits white at strength 0; UsdPreviewSurface emits its emissiveColor, black
+           * unless authored. */
+          PrincipledBsdfNode *surface = static_cast<PrincipledBsdfNode *>(nodeDesc.node);
+          surface->set_emission_color(zero_float3());
+          surface->set_emission_strength(1.0f);
+        }
         _nodes.emplace(nodePath, nodeDesc);
       }
       else {

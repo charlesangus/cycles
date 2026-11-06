@@ -39,6 +39,8 @@ class HdCyclesMaterial final : public PXR_NS::HdMaterial {
     /* UsdUVTexture applies rgba * scale + bias to what it samples, which image_texture lacks. */
     float scale[4] = {1.0f, 1.0f, 1.0f, 1.0f};
     float bias[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+    /* UsdPreviewSurface turns opacity into a cutout when this is above zero. */
+    float opacityThreshold = 0.0f;
   };
 
   void Initialize(PXR_NS::HdRenderParam *renderParam);
