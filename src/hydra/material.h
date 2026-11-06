@@ -52,6 +52,7 @@ class HdCyclesMaterial final : public PXR_NS::HdMaterial {
                          CCL_NS::ShaderGraph *shaderGraph);
 
   void PopulateShaderGraph(PXR_NS::HdMaterialNetworkSchema network);
+  void PopulateFallbackShaderGraph();
 
   CCL_NS::Shader *_shader = nullptr;
   std::unordered_map<PXR_NS::SdfPath, NodeDesc, PXR_NS::SdfPath::Hash> _nodes;

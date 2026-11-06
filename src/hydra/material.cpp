@@ -256,6 +256,7 @@ void HdCyclesMaterial::Sync(HdSceneDelegate *sceneDelegate,
     }
     else {
       TF_RUNTIME_ERROR("Could not get a material network for %s.", id.GetText());
+      PopulateFallbackShaderGraph();
     }
   }
 
@@ -411,6 +412,19 @@ void HdCyclesMaterial::UpdateConnections(NodeDesc &nodeDesc,
   }
 }
 
+static void CreateInstanceIdAov(ShaderGraph *graph)
+{
+  const ustring instanceId(HdAovTokens->instanceId.GetString());
+
+  OutputAOVNode *aovNode = graph->create_node<OutputAOVNode>();
+  aovNode->set_name(instanceId);
+
+  AttributeNode *instanceIdNode = graph->create_node<AttributeNode>();
+  instanceIdNode->set_attribute(instanceId);
+
+  graph->connect(instanceIdNode->output("Fac"), aovNode->input("Value"));
+}
+
 void HdCyclesMaterial::PopulateShaderGraph(HdMaterialNetworkSchema network)
 {
   _nodes.clear();
@@ -555,20 +569,34 @@ void HdCyclesMaterial::PopulateShaderGraph(HdMaterialNetworkSchema network)
     graph->connect(output, input);
   }
 
-  /* Create the instanceId AOV output. */
-  {
-    const ustring instanceId(HdAovTokens->instanceId.GetString());
-
-    OutputAOVNode *aovNode = graph->create_node<OutputAOVNode>();
-    aovNode->set_name(instanceId);
-
-    AttributeNode *instanceIdNode = graph->create_node<AttributeNode>();
-    instanceIdNode->set_attribute(instanceId);
-
-    graph->connect(instanceIdNode->output("Fac"), aovNode->input("Value"));
-  }
+  CreateInstanceIdAov(graph.get());
 
   _shader->set_graph(std::move(graph));
+}
+
+void HdCyclesMaterial::PopulateFallbackShaderGraph()
+{
+  if (_shader->graph && _nodes.empty()) {
+    return;
+  }
+
+  _nodes.clear();
+
+  /* Scene code dereferences the graph of every shader, starting with Shader::tag_update, so a
+   * material with no network Cycles can read still needs one. This one looks like the default
+   * surface, so its meshes render as if they had no material. */
+  unique_ptr<ShaderGraph> graph = make_unique<ShaderGraph>();
+
+  ObjectInfoNode *objectNode = graph->create_node<ObjectInfoNode>();
+  DiffuseBsdfNode *diffuseNode = graph->create_node<DiffuseBsdfNode>();
+
+  graph->connect(objectNode->output("Color"), diffuseNode->input("Color"));
+  graph->connect(diffuseNode->output("BSDF"), graph->output()->input("Surface"));
+
+  CreateInstanceIdAov(graph.get());
+
+  _shader->set_graph(std::move(graph));
+  _shader->tag_modified();
 }
 
 void HdCyclesMaterial::Finalize(HdRenderParam *renderParam)
