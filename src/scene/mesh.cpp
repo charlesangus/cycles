@@ -31,6 +31,7 @@ struct MikkMeshWrapper {
                   const packed_normal *vertex_normal,
                   const packed_normal *corner_normal,
                   const float2 *uv,
+                  const bool uv_per_vertex,
                   packed_float3 *tangent,
                   float *tangent_sign)
       : mesh(mesh),
@@ -38,6 +39,7 @@ struct MikkMeshWrapper {
         vertex_normal(vertex_normal),
         corner_normal(corner_normal),
         uv(uv),
+        uv_per_vertex(uv_per_vertex),
         tangent(tangent),
         tangent_sign(tangent_sign)
   {
@@ -75,8 +77,9 @@ struct MikkMeshWrapper {
     /* TODO: Check whether introducing a template boolean in order to
      * turn this into a constexpr is worth it. */
     if (has_uv()) {
-      const int corner_index = CornerIndex(face_num, vert_num);
-      const float2 tfuv = uv[corner_index];
+      const int uv_index = uv_per_vertex ? VertexIndex(face_num, vert_num) :
+                                           CornerIndex(face_num, vert_num);
+      const float2 tfuv = uv[uv_index];
       return mikk::float3(tfuv.x, tfuv.y, 1.0f);
     }
     /* revert to vertex position */
@@ -120,6 +123,7 @@ struct MikkMeshWrapper {
   const packed_normal *vertex_normal;
   const packed_normal *corner_normal;
   const float2 *uv;
+  bool uv_per_vertex;
 
   packed_float3 *tangent;
   float *tangent_sign;
@@ -145,7 +149,11 @@ static void mikk_compute_tangents(Attribute *attr_uv,
 
   const packed_normal *vertex_normal = attr_vN ? attr_vN->data<packed_normal>() : nullptr;
   const packed_normal *corner_normal = attr_cN ? attr_cN->data<packed_normal>() : nullptr;
-  const float2 *uv = (attr_uv) ? attr_uv->data<float2>() : nullptr;
+  /* Hydra hands over vertex-interpolated UVs as they are, one per vertex rather than one per
+   * corner. UVs coarser than that span no tangent frame, so use the position mapping for them. */
+  const bool uv_per_vertex = attr_uv && attr_uv->element == ATTR_ELEMENT_VERTEX;
+  const bool uv_usable = attr_uv && (uv_per_vertex || attr_uv->element == ATTR_ELEMENT_CORNER);
+  const float2 *uv = uv_usable ? attr_uv->data<float2>() : nullptr;
 
   const ustring name = ustring((attr_uv) ? attr_uv->name.string() + tangent_postfix :
                                            Attribute::standard_name(tangent_std));
@@ -172,7 +180,8 @@ static void mikk_compute_tangents(Attribute *attr_uv,
     tangent_sign = attr_sign->data_for_write<float>();
   }
 
-  MikkMeshWrapper userdata(mesh, vertex_normal, corner_normal, uv, tangent, tangent_sign);
+  MikkMeshWrapper userdata(
+      mesh, vertex_normal, corner_normal, uv, uv_per_vertex, tangent, tangent_sign);
   /* Compute tangents. */
   mikk::Mikktspace(userdata).genTangSpace();
 }
