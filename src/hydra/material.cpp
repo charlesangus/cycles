@@ -12,6 +12,10 @@
 #include "scene/shader_graph.h"
 #include "scene/shader_nodes.h"
 
+#include <algorithm>
+#include <iterator>
+
+#include <pxr/base/gf/vec4f.h>
 #include <pxr/imaging/hd/material.h>
 #include <pxr/imaging/hd/materialConnectionSchema.h>
 #include <pxr/imaging/hd/materialNetworkSchema.h>
@@ -59,6 +63,8 @@ TF_DEFINE_PRIVATE_TOKENS(CyclesMaterialTokens,
     (st)
     (wrapS)
     (wrapT)
+    (scale)
+    (bias)
     (periodic)
 );
 // clang-format on
@@ -154,6 +160,45 @@ class UsdToCyclesTexture : public UsdToCyclesMapping {
 
 namespace {
 
+bool IsIdentityScaleBias(const float *scale, const float *bias, const int first, const int count)
+{
+  for (int i = first; i < first + count; i++) {
+    if (scale[i] != 1.0f || bias[i] != 0.0f) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/* Insert `output * scale + bias` after a texture output; float outputs are the alpha channel. */
+ShaderOutput *ApplyScaleBias(ShaderGraph *graph,
+                             ShaderOutput *output,
+                             const float *scale,
+                             const float *bias)
+{
+  if (output->socket_type.type == SocketType::FLOAT) {
+    if (IsIdentityScaleBias(scale, bias, 3, 1)) {
+      return output;
+    }
+    MathNode *node = graph->create_node<MathNode>();
+    node->set_math_type(NODE_MATH_MULTIPLY_ADD);
+    node->set_value2(scale[3]);
+    node->set_value3(bias[3]);
+    graph->connect(output, node->input("Value1"));
+    return node->output("Value");
+  }
+
+  if (IsIdentityScaleBias(scale, bias, 0, 3)) {
+    return output;
+  }
+  VectorMathNode *node = graph->create_node<VectorMathNode>();
+  node->set_math_type(NODE_VECTOR_MATH_MULTIPLY_ADD);
+  node->set_vector2(make_float3(scale[0], scale[1], scale[2]));
+  node->set_vector3(make_float3(bias[0], bias[1], bias[2]));
+  graph->connect(output, node->input("Vector1"));
+  return node->output("Vector");
+}
+
 class UsdToCycles {
   const UsdToCyclesMapping UsdPreviewSurface = {
       "principled_bsdf",
@@ -247,8 +292,12 @@ void HdCyclesMaterial::Sync(HdSceneDelegate *sceneDelegate,
 
     if (network) {
       if (!_nodes.empty() && !dirtyResource) {
-        UpdateParameters(network);
-        _shader->tag_modified();
+        if (UpdateParameters(network)) {
+          PopulateShaderGraph(network);
+        }
+        else {
+          _shader->tag_modified();
+        }
       }
       else {
         PopulateShaderGraph(network);
@@ -267,16 +316,34 @@ void HdCyclesMaterial::Sync(HdSceneDelegate *sceneDelegate,
   *dirtyBits = DirtyBits::Clean;
 }
 
-void HdCyclesMaterial::UpdateParameters(NodeDesc &nodeDesc,
-                                        HdMaterialNodeParameterContainerSchema params,
-                                        const SdfPath &nodePath)
+bool HdCyclesMaterial::UpdateParameters(NodeDesc &nodeDesc,
+                                         HdMaterialNodeParameterContainerSchema params,
+                                         const SdfPath &nodePath)
 {
+  bool rebuild = false;
+  const bool isTexture = nodeDesc.mapping && nodeDesc.mapping->nodeType() == "image_texture";
+
   for (const TfToken &paramName : params.GetNames()) {
     auto valueDs = params.Get(paramName).GetValue();
     if (!valueDs) {
       continue;
     }
     VtValue value = valueDs->GetValue(0.0f);
+
+    if (isTexture &&
+        (paramName == CyclesMaterialTokens->scale || paramName == CyclesMaterialTokens->bias))
+    {
+      value = VtValue::Cast<GfVec4f>(value);
+      if (value.IsHolding<GfVec4f>()) {
+        float *dst = paramName == CyclesMaterialTokens->scale ? nodeDesc.scale : nodeDesc.bias;
+        const GfVec4f &v = value.UncheckedGet<GfVec4f>();
+        for (int i = 0; i < 4; i++) {
+          rebuild |= dst[i] != v[i];
+          dst[i] = v[i];
+        }
+      }
+      continue;
+    }
 
     /* See if the parameter name is in USDPreviewSurface terms, and needs to be converted .*/
     const UsdToCyclesMapping *inputMapping = nodeDesc.mapping;
@@ -303,10 +370,13 @@ void HdCyclesMaterial::UpdateParameters(NodeDesc &nodeDesc,
 
     SetNodeValue(nodeDesc.node, *input, value);
   }
+
+  return rebuild;
 }
 
-void HdCyclesMaterial::UpdateParameters(HdMaterialNetworkSchema network)
+bool HdCyclesMaterial::UpdateParameters(HdMaterialNetworkSchema network)
 {
+  bool rebuild = false;
   HdMaterialNodeContainerSchema nodes = network.GetNodes();
   for (const TfToken &nodeName : nodes.GetNames()) {
     const SdfPath nodePath = MaterialNodeNameToSdfPath(nodeName);
@@ -317,8 +387,10 @@ void HdCyclesMaterial::UpdateParameters(HdMaterialNetworkSchema network)
       continue;
     }
 
-    UpdateParameters(nodeIt->second, nodes.Get(nodeName).GetParameters(), nodePath);
+    rebuild |= UpdateParameters(nodeIt->second, nodes.Get(nodeName).GetParameters(), nodePath);
   }
+
+  return rebuild;
 }
 
 void HdCyclesMaterial::UpdateConnections(NodeDesc &nodeDesc,
@@ -408,7 +480,35 @@ void HdCyclesMaterial::UpdateConnections(NodeDesc &nodeDesc,
       continue;
     }
 
-    shaderGraph->connect(output, input);
+    ShaderOutput *source = output;
+    float scale[4];
+    float bias[4];
+    std::copy(std::begin(srcNodeIt->second.scale), std::end(srcNodeIt->second.scale), scale);
+    std::copy(std::begin(srcNodeIt->second.bias), std::end(srcNodeIt->second.bias), bias);
+
+    /* UsdPreviewSurface.normal is a tangent-space vector in -1..1, while Cycles' normal map node
+     * decodes a 0..1 colour itself. */
+    const bool isNormalMap = outputMapping && outputMapping->nodeType() == "image_texture" &&
+                             input->socket_type.type == SocketType::NORMAL &&
+                             output->socket_type.type != SocketType::FLOAT;
+    if (isNormalMap) {
+      for (int i = 0; i < 3; i++) {
+        scale[i] *= 0.5f;
+        bias[i] = bias[i] * 0.5f + 0.5f;
+      }
+    }
+
+    if (outputMapping && outputMapping->nodeType() == "image_texture") {
+      source = ApplyScaleBias(shaderGraph, source, scale, bias);
+    }
+
+    if (isNormalMap) {
+      NormalMapNode *normalMap = shaderGraph->create_node<NormalMapNode>();
+      shaderGraph->connect(source, normalMap->input("Color"));
+      source = normalMap->output("Normal");
+    }
+
+    shaderGraph->connect(source, input);
   }
 }
 
@@ -477,7 +577,7 @@ void HdCyclesMaterial::PopulateShaderGraph(HdMaterialNetworkSchema network)
       }
     }
 
-    UpdateParameters(nodeDesc, nodeSchema.GetParameters(), nodePath);
+    UpdateParameters(_nodes.at(nodePath), nodeSchema.GetParameters(), nodePath);
   }
 
   /* Now that all nodes have been constructed, iterate the network again and build up any

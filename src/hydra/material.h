@@ -36,15 +36,19 @@ class HdCyclesMaterial final : public PXR_NS::HdMaterial {
   struct NodeDesc {
     CCL_NS::ShaderNode *node;
     const class UsdToCyclesMapping *mapping;
+    /* UsdUVTexture applies rgba * scale + bias to what it samples, which image_texture lacks. */
+    float scale[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+    float bias[4] = {0.0f, 0.0f, 0.0f, 0.0f};
   };
 
   void Initialize(PXR_NS::HdRenderParam *renderParam);
 
-  void UpdateParameters(NodeDesc &nodeDesc,
+  /* Returns true when a change needs the shader graph rebuilt rather than a socket update. */
+  bool UpdateParameters(NodeDesc &nodeDesc,
                         PXR_NS::HdMaterialNodeParameterContainerSchema params,
                         const PXR_NS::SdfPath &nodePath);
 
-  void UpdateParameters(PXR_NS::HdMaterialNetworkSchema network);
+  bool UpdateParameters(PXR_NS::HdMaterialNetworkSchema network);
 
   void UpdateConnections(NodeDesc &nodeDesc,
                          PXR_NS::HdMaterialNodeSchema nodeSchema,
