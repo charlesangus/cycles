@@ -311,6 +311,7 @@ void HdCyclesMaterial::Sync(HdSceneDelegate *sceneDelegate,
       if (!_nodes.empty() && !dirtyResource) {
         if (UpdateParameters(network)) {
           PopulateShaderGraph(network);
+          _shader->tag_modified();
         }
         else {
           _shader->tag_modified();
@@ -318,6 +319,7 @@ void HdCyclesMaterial::Sync(HdSceneDelegate *sceneDelegate,
       }
       else {
         PopulateShaderGraph(network);
+        _shader->tag_modified();
       }
     }
     else {
