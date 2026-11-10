@@ -124,7 +124,12 @@ void HdCyclesRenderBuffer::Unmap()
   thread_scoped_lock lock(_mutex);
 
   // Callers may unmap after a Map that returned null, which took no ownership
-  if (_mapCount == 0 || _mapOwner != std::this_thread::get_id()) {
+  if (_mapCount == 0) {
+    return;
+  }
+
+  if (_mapOwner != std::this_thread::get_id()) {
+    TF_CODING_ERROR("HdCyclesRenderBuffer unmapped by a thread that does not hold the map.");
     return;
   }
 
