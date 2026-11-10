@@ -14,25 +14,17 @@ HdCyclesOutputDriver::HdCyclesOutputDriver(HdCyclesSession *renderParam)
 {
 }
 
-void HdCyclesOutputDriver::write_render_tile(const Tile &tile)
-{
-  update_render_tile(tile);
+namespace {
 
-  // Update convergence state of all render buffers
-  for (const HdRenderPassAovBinding &aovBinding : _renderParam->GetAovBindings()) {
-    if (auto *const renderBuffer = static_cast<HdCyclesRenderBuffer *>(aovBinding.renderBuffer)) {
-      renderBuffer->SetConverged(true);
-    }
-  }
-}
-
-bool HdCyclesOutputDriver::update_render_tile(const Tile &tile)
+void updateAovBuffers(const HdCyclesSession *renderParam, const OutputDriver::Tile &tile)
 {
+  const HdRenderPassAovBinding &displayAovBinding = renderParam->GetDisplayAovBindingLocked();
+
   std::vector<float> pixels;
 
-  for (const HdRenderPassAovBinding &aovBinding : _renderParam->GetAovBindings()) {
+  for (const HdRenderPassAovBinding &aovBinding : renderParam->GetAovBindingsLocked()) {
     if (auto *const renderBuffer = static_cast<HdCyclesRenderBuffer *>(aovBinding.renderBuffer)) {
-      if (aovBinding == _renderParam->GetDisplayAovBinding() && renderBuffer->IsResourceUsed()) {
+      if (aovBinding == displayAovBinding && renderBuffer->IsResourceUsed()) {
         continue;  // Display AOV binding is already updated by Cycles display driver
       }
 
@@ -74,6 +66,29 @@ bool HdCyclesOutputDriver::update_render_tile(const Tile &tile)
       }
     }
   }
+}
+
+}  // namespace
+
+void HdCyclesOutputDriver::write_render_tile(const Tile &tile)
+{
+  const thread_scoped_lock lock = _renderParam->LockAovBindings();
+
+  updateAovBuffers(_renderParam, tile);
+
+  // Update convergence state of all render buffers
+  for (const HdRenderPassAovBinding &aovBinding : _renderParam->GetAovBindingsLocked()) {
+    if (auto *const renderBuffer = static_cast<HdCyclesRenderBuffer *>(aovBinding.renderBuffer)) {
+      renderBuffer->SetConverged(true);
+    }
+  }
+}
+
+bool HdCyclesOutputDriver::update_render_tile(const Tile &tile)
+{
+  const thread_scoped_lock lock = _renderParam->LockAovBindings();
+
+  updateAovBuffers(_renderParam, tile);
 
   return true;
 }

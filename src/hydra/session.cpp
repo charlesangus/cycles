@@ -146,7 +146,10 @@ void HdCyclesSession::SyncAovBindings(const HdRenderPassAovBindingVector &aovBin
   scene->delete_nodes(set<Pass *>(scene_passes.begin(), scene_passes.end()));
 
   // Update passes with requested AOV bindings
-  _aovBindings = aovBindings;
+  {
+    const thread_scoped_lock lock(_aovMutex);
+    _aovBindings = aovBindings;
+  }
   for (const HdRenderPassAovBinding &aovBinding : aovBindings) {
     const auto cyclesAov = kAovToPass.find(aovBinding.aovName);
     if (cyclesAov == kAovToPass.end()) {
@@ -167,6 +170,7 @@ void HdCyclesSession::SyncAovBindings(const HdRenderPassAovBindingVector &aovBin
 
 void HdCyclesSession::RemoveAovBinding(HdRenderBuffer *renderBuffer)
 {
+  const thread_scoped_lock lock(_aovMutex);
   for (HdRenderPassAovBinding &aovBinding : _aovBindings) {
     if (renderBuffer == aovBinding.renderBuffer) {
       aovBinding.renderBuffer = nullptr;
