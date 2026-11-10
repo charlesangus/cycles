@@ -40,7 +40,12 @@ void updateAovBuffers(const HdCyclesSession *renderParam, const OutputDriver::Ti
           (format >= HdFormatFloat32 && format <= HdFormatFloat32Vec4))
       {
         float *const data = static_cast<float *>(renderBuffer->Map());
-        TF_VERIFY(tile.get_pass_pixels(aovBinding.aovName.GetString(), channels, data));
+        // Hydra may have reallocated the buffer since the check above; mapping freezes its size
+        if (data && tile.size.x == renderBuffer->GetWidth() &&
+            tile.size.y == renderBuffer->GetHeight() && renderBuffer->GetFormat() == format)
+        {
+          TF_VERIFY(tile.get_pass_pixels(aovBinding.aovName.GetString(), channels, data));
+        }
         renderBuffer->Unmap();
       }
       else {

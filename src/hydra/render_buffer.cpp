@@ -34,21 +34,25 @@ bool HdCyclesRenderBuffer::Allocate(const GfVec3i &dimensions,
     return false;
   }
 
-  const size_t oldSize = _dataSize;
-  const size_t newSize = dimensions[0] * dimensions[1] * HdDataSizeOfFormat(format);
-  if (oldSize == newSize) {
+  thread_scoped_lock lock(_mutex);
+
+  const unsigned int width = dimensions[0];
+  const unsigned int height = dimensions[1];
+  if (width == _width && height == _height && format == _format) {
     return true;
   }
 
-  if (IsMapped()) {
+  if (_mapCount != 0 && _mapOwner == std::this_thread::get_id()) {
     TF_RUNTIME_ERROR("HdCyclesRenderBuffer::Allocate called while buffer is mapped.");
     return false;
   }
+  _unmapped.wait(lock, [this] { return _mapCount == 0; });
 
-  _width = dimensions[0];
-  _height = dimensions[1];
+  _width = width;
+  _height = height;
   _format = format;
-  _dataSize = newSize;
+  _dataSize = size_t(width) * size_t(height) * HdDataSizeOfFormat(format);
+  _data.resize(_dataSize);
   _resourceUsed = false;
 
   return true;
@@ -56,6 +60,15 @@ bool HdCyclesRenderBuffer::Allocate(const GfVec3i &dimensions,
 
 void HdCyclesRenderBuffer::_Deallocate()
 {
+  thread_scoped_lock lock(_mutex);
+
+  if (_mapCount != 0 && _mapOwner == std::this_thread::get_id()) {
+    TF_CODING_ERROR("HdCyclesRenderBuffer deallocated while mapped by the deallocating thread.");
+  }
+  else {
+    _unmapped.wait(lock, [this] { return _mapCount == 0; });
+  }
+
   _width = 0u;
   _height = 0u;
   _format = HdFormatInvalid;
@@ -67,30 +80,65 @@ void HdCyclesRenderBuffer::_Deallocate()
   _resource = VtValue();
 }
 
+bool HdCyclesRenderBuffer::_IsMappedByOtherThread() const
+{
+  return _mapCount != 0 && _mapOwner != std::this_thread::get_id();
+}
+
+unsigned int HdCyclesRenderBuffer::GetWidth() const
+{
+  const thread_scoped_lock lock(_mutex);
+  return _width;
+}
+
+unsigned int HdCyclesRenderBuffer::GetHeight() const
+{
+  const thread_scoped_lock lock(_mutex);
+  return _height;
+}
+
+HdFormat HdCyclesRenderBuffer::GetFormat() const
+{
+  const thread_scoped_lock lock(_mutex);
+  return _format;
+}
+
 void *HdCyclesRenderBuffer::Map()
 {
+  thread_scoped_lock lock(_mutex);
+  _unmapped.wait(lock, [this] { return !_IsMappedByOtherThread(); });
+
   // Mapping is not implemented when a resource is set
-  if (!_resource.IsEmpty()) {
+  if (!_resource.IsEmpty() || _data.empty()) {
     return nullptr;
   }
 
-  if (_data.size() != _dataSize) {
-    _data.resize(_dataSize);
-  }
-
-  ++_mapped;
+  _mapOwner = std::this_thread::get_id();
+  ++_mapCount;
 
   return _data.data();
 }
 
 void HdCyclesRenderBuffer::Unmap()
 {
-  --_mapped;
+  thread_scoped_lock lock(_mutex);
+
+  // Callers may unmap after a Map that returned null, which took no ownership
+  if (_mapCount == 0 || _mapOwner != std::this_thread::get_id()) {
+    return;
+  }
+
+  if (--_mapCount == 0) {
+    _mapOwner = std::thread::id();
+    lock.unlock();
+    _unmapped.notify_all();
+  }
 }
 
 bool HdCyclesRenderBuffer::IsMapped() const
 {
-  return _mapped != 0;
+  const thread_scoped_lock lock(_mutex);
+  return _mapCount != 0;
 }
 
 void HdCyclesRenderBuffer::Resolve() {}
@@ -114,6 +162,8 @@ VtValue HdCyclesRenderBuffer::GetResource(bool multiSampled) const
 {
   TF_UNUSED(multiSampled);
 
+  const thread_scoped_lock lock(_mutex);
+
   _resourceUsed = true;
 
   return _resource;
@@ -121,6 +171,7 @@ VtValue HdCyclesRenderBuffer::GetResource(bool multiSampled) const
 
 void HdCyclesRenderBuffer::SetResource(const VtValue &resource)
 {
+  const thread_scoped_lock lock(_mutex);
   _resource = resource;
 }
 
@@ -164,9 +215,9 @@ void writePixels(const SrcT *srcPtr,
                  DstT *dstPtr,
                  const GfVec2i &dstSize,
                  const int dstChannelCount,
+                 const GfVec2i &writeSize,
                  const Convertor &convertor = {})
 {
-  const auto writeSize = GfVec2i(GfMin(srcSize[0], dstSize[0]), GfMin(srcSize[1], dstSize[1]));
   const auto writeChannelCount = GfMin(srcChannelCount, dstChannelCount);
 
   for (int y = 0; y < writeSize[1]; ++y) {
@@ -188,10 +239,23 @@ void HdCyclesRenderBuffer::WritePixels(const float *srcPixels,
                                        const int srcChannels,
                                        bool isId)
 {
+  thread_scoped_lock lock(_mutex);
+  _unmapped.wait(lock, [this] { return !_IsMappedByOtherThread(); });
+
+  const int width = int(_width);
+  const int height = int(_height);
+  if (_data.empty() || srcOffset[0] < 0 || srcOffset[1] < 0 || srcOffset[0] >= width ||
+      srcOffset[1] >= height)
+  {
+    return;
+  }
+  const GfVec2i writeSize(GfMin(srcDims[0], width - srcOffset[0]),
+                          GfMin(srcDims[1], height - srcOffset[1]));
+
   uint8_t *dstPixels = _data.data();
 
   const size_t formatSize = HdDataSizeOfFormat(_format);
-  dstPixels += srcOffset[1] * (formatSize * _width) + srcOffset[0] * formatSize;
+  dstPixels += size_t(srcOffset[1]) * (formatSize * _width) + size_t(srcOffset[0]) * formatSize;
 
   switch (_format) {
     case HdFormatUNorm8:
@@ -204,6 +268,7 @@ void HdCyclesRenderBuffer::WritePixels(const float *srcPixels,
                   dstPixels,
                   GfVec2i(_width, _height),
                   1 + (_format - HdFormatUNorm8),
+                  writeSize,
                   UInt8Conversion());
       break;
 
@@ -217,6 +282,7 @@ void HdCyclesRenderBuffer::WritePixels(const float *srcPixels,
                   dstPixels,
                   GfVec2i(_width, _height),
                   1 + (_format - HdFormatSNorm8),
+                  writeSize,
                   SInt8Conversion());
       break;
 
@@ -230,6 +296,7 @@ void HdCyclesRenderBuffer::WritePixels(const float *srcPixels,
                   reinterpret_cast<half *>(dstPixels),
                   GfVec2i(_width, _height),
                   1 + (_format - HdFormatFloat16),
+                  writeSize,
                   HalfConversion());
       break;
 
@@ -242,7 +309,8 @@ void HdCyclesRenderBuffer::WritePixels(const float *srcPixels,
                   srcChannels,
                   reinterpret_cast<float *>(dstPixels),
                   GfVec2i(_width, _height),
-                  1 + (_format - HdFormatFloat32));
+                  1 + (_format - HdFormatFloat32),
+                  writeSize);
       break;
 
     case HdFormatInt32:
@@ -254,6 +322,7 @@ void HdCyclesRenderBuffer::WritePixels(const float *srcPixels,
                     reinterpret_cast<int *>(dstPixels),
                     GfVec2i(_width, _height),
                     1,
+                    writeSize,
                     IdConversion());
       }
       else {
@@ -262,7 +331,8 @@ void HdCyclesRenderBuffer::WritePixels(const float *srcPixels,
                     srcChannels,
                     reinterpret_cast<int *>(dstPixels),
                     GfVec2i(_width, _height),
-                    1);
+                    1,
+                    writeSize);
       }
       break;
     case HdFormatInt32Vec2:
@@ -273,7 +343,8 @@ void HdCyclesRenderBuffer::WritePixels(const float *srcPixels,
                   srcChannels,
                   reinterpret_cast<int *>(dstPixels),
                   GfVec2i(_width, _height),
-                  1 + (_format - HdFormatInt32));
+                  1 + (_format - HdFormatInt32),
+                  writeSize);
       break;
 
     default:
