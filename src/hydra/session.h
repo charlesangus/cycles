@@ -10,6 +10,8 @@
 
 #include <pxr/imaging/hd/renderDelegate.h>
 
+#include <optional>
+
 HDCYCLES_NAMESPACE_OPEN_SCOPE
 
 struct SceneLock {
@@ -29,6 +31,10 @@ class HdCyclesSession final : public PXR_NS::HdRenderParam {
   ~HdCyclesSession() override;
 
   void UpdateScene();
+
+  /* An explicit background transparency, which wins over the default UpdateScene() picks from
+   * the lights; nullopt goes back to that default. The caller holds the scene lock. */
+  void SetBackgroundTransparent(std::optional<bool> transparent);
 
   double GetStageMetersPerUnit() const
   {
@@ -90,6 +96,8 @@ class HdCyclesSession final : public PXR_NS::HdRenderParam {
   mutable CCL_NS::thread_mutex _aovMutex;
   PXR_NS::HdRenderPassAovBindingVector _aovBindings;
   PXR_NS::HdRenderPassAovBinding _displayAovBinding;
+  std::optional<bool> _backgroundTransparent;
+  bool _defaultBackgroundTransparent = false;
 };
 
 HDCYCLES_NAMESPACE_CLOSE_SCOPE

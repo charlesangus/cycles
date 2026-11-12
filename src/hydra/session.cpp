@@ -117,7 +117,7 @@ void HdCyclesSession::UpdateScene()
 
     if (!background_light) {
       scene->background->set_shader(scene->default_background);
-      scene->background->set_transparent(true);
+      _defaultBackgroundTransparent = true;
 
       /* Set background color depending to non-zero value if there are no
        * lights in the scene, to match behavior of other renderers. */
@@ -130,11 +130,20 @@ void HdCyclesSession::UpdateScene()
     }
     else {
       scene->background->set_shader(background_light->get_shader());
-      scene->background->set_transparent(false);
+      _defaultBackgroundTransparent = false;
     }
 
+    scene->background->set_transparent(
+        _backgroundTransparent.value_or(_defaultBackgroundTransparent));
     scene->background->tag_update(scene);
   }
+}
+
+void HdCyclesSession::SetBackgroundTransparent(const std::optional<bool> transparent)
+{
+  _backgroundTransparent = transparent;
+  session->scene->background->set_transparent(
+      _backgroundTransparent.value_or(_defaultBackgroundTransparent));
 }
 
 void HdCyclesSession::SyncAovBindings(const HdRenderPassAovBindingVector &aovBindings)

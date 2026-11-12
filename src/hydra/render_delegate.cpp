@@ -18,11 +18,17 @@
 #include "hydra/session.h"
 #include "hydra/volume.h"
 #include "scene/integrator.h"
+#include "scene/shader.h"
+// After shader.h, so that 'set_shader' takes the 'Node *' overload
+#include "scene/background.h"
+#include "scene/film.h"
 #include "scene/scene.h"
 #include "session/session.h"
 
 #include <pxr/base/tf/getenv.h>
 #include <pxr/imaging/hgi/tokens.h>
+
+#include <string_view>
 
 HDCYCLES_NAMESPACE_OPEN_SCOPE
 
@@ -110,6 +116,69 @@ SessionParams GetSessionParams(const HdRenderSettingsMap &settings)
   params.denoise_device = params.device;
 
   return params;
+}
+
+// Scene nodes whose sockets are render settings, keyed "cycles:<node>:<socket>". The camera is
+// driven by Hydra, the dicing camera and scene attributes by the scene.
+const char *const kSettingsNodes[] = {"integrator", "film", "background"};
+
+Node *GetSettingsNode(Scene *scene, const std::string_view name)
+{
+  if (name == "integrator") {
+    return scene->integrator;
+  }
+  if (name == "film") {
+    return scene->film;
+  }
+  if (name == "background") {
+    return scene->background;
+  }
+  return nullptr;
+}
+
+bool IsSettingSocket(const std::string_view nodeName, const SocketType &socket)
+{
+  switch (socket.type) {
+    case SocketType::UNDEFINED:
+    case SocketType::CLOSURE:
+    case SocketType::NODE:
+    case SocketType::NODE_ARRAY:
+      return false;
+    default:
+      break;
+  }
+  // Deep output writes through buffers only a deep output driver provides, which the delegate
+  // does not install
+  if (nodeName == "film" &&
+      (socket.name == "use_deep_output" || socket.name.string().rfind("deep_", 0) == 0))
+  {
+    return false;
+  }
+  return true;
+}
+
+const SocketType *FindSettingSocket(Scene *scene, const std::string &key, Node **node)
+{
+  const std::string_view prefix = "cycles:";
+  if (key.rfind(prefix, 0) != 0) {
+    return nullptr;
+  }
+  const size_t separator = key.find(':', prefix.size());
+  if (separator == std::string::npos) {
+    return nullptr;
+  }
+  const std::string_view nodeName = std::string_view(key).substr(prefix.size(),
+                                                                 separator - prefix.size());
+  Node *const found = GetSettingsNode(scene, nodeName);
+  if (!found) {
+    return nullptr;
+  }
+  const SocketType *socket = found->type->find_input(ustring(key.substr(separator + 1)));
+  if (!socket || !IsSettingSocket(nodeName, *socket)) {
+    return nullptr;
+  }
+  *node = found;
+  return socket;
 }
 
 }  // namespace
@@ -389,10 +458,17 @@ HdRenderSettingDescriptorList HdCyclesDelegate::GetRenderSettingDescriptors() co
       VtValue(0),
   });
 
-  for (const SocketType &socket : scene->integrator->type->inputs) {
-    descriptors.push_back({socket.ui_name.string(),
-                           TfToken("cycles:integrator:" + socket.name.string()),
-                           GetNodeValue(scene->integrator, socket)});
+  for (const char *nodeName : kSettingsNodes) {
+    const Node *const node = GetSettingsNode(scene, nodeName);
+    for (const SocketType &socket : node->type->inputs) {
+      if (!IsSettingSocket(nodeName, socket)) {
+        continue;
+      }
+      descriptors.push_back(
+          {socket.ui_name.string(),
+           TfToken(std::string("cycles:") + nodeName + ":" + socket.name.string()),
+           GetNodeValue(node, socket)});
+    }
   }
 
   return descriptors;
@@ -425,13 +501,26 @@ void HdCyclesDelegate::SetRenderSetting(const PXR_NS::TfToken &key, const PXR_NS
     ++_settingsVersion;
   }
   else {
-    const std::string &keyString = key.GetString();
-    if (keyString.rfind("cycles:integrator:", 0) == 0) {
-      const ustring socketName(keyString, sizeof("cycles:integrator:") - 1);
-      if (const SocketType *socket = scene->integrator->type->find_input(socketName)) {
-        SetNodeValue(scene->integrator, *socket, value);
-        ++_settingsVersion;
+    Node *node = nullptr;
+    if (const SocketType *socket = FindSettingSocket(scene, key.GetString(), &node)) {
+      const SceneLock lock(_renderParam.get());
+      if (node == scene->background && socket->name == "transparent") {
+        // An empty value goes back to the default the lights pick
+        if (value.IsEmpty()) {
+          _renderParam->SetBackgroundTransparent(std::nullopt);
+        }
+        else {
+          SetNodeValue(node, *socket, value);
+          _renderParam->SetBackgroundTransparent(scene->background->get_transparent());
+        }
       }
+      else {
+        SetNodeValue(node, *socket, value);
+      }
+      if (node == scene->integrator) {
+        scene->integrator->tag_update(scene, Integrator::UPDATE_NONE);
+      }
+      ++_settingsVersion;
     }
   }
 }
@@ -460,12 +549,9 @@ VtValue HdCyclesDelegate::GetRenderSetting(const TfToken &key) const
     return VtValue((session->params.use_sample_subset) ? session->params.sample_subset_offset : 0);
   }
 
-  const std::string &keyString = key.GetString();
-  if (keyString.rfind("cycles:integrator:", 0) == 0) {
-    const ustring socketName(keyString, sizeof("cycles:integrator:") - 1);
-    if (const SocketType *socket = scene->integrator->type->find_input(socketName)) {
-      return GetNodeValue(scene->integrator, *socket);
-    }
+  Node *node = nullptr;
+  if (const SocketType *socket = FindSettingSocket(scene, key.GetString(), &node)) {
+    return GetNodeValue(node, *socket);
   }
 
   return VtValue();
