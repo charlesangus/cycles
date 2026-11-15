@@ -10,6 +10,8 @@
 
 #include <pxr/imaging/hd/renderDelegate.h>
 
+#include <atomic>
+#include <cstdint>
 #include <optional>
 
 HDCYCLES_NAMESPACE_OPEN_SCOPE
@@ -89,6 +91,12 @@ class HdCyclesSession final : public PXR_NS::HdRenderParam {
 
   CCL_NS::Session *session;
   bool keep_nodes;
+
+  /* The latest of the session's resets whose render has reached the render buffers, and the
+   * latest whose render finished into them: a render cut short by a reset may still write them,
+   * and mark them converged, after the reset was asked for. */
+  std::atomic<uint64_t> resetsWritten{0};
+  std::atomic<uint64_t> resetsConverged{0};
 
  private:
   const bool _ownCyclesSession;

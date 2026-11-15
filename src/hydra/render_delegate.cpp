@@ -407,7 +407,10 @@ VtDictionary HdCyclesDelegate::GetRenderStats() const
           {"peakMemory", VtValue(stats.mem_peak)},
           {"totalClockTime", VtValue(totalTime)},
           {"totalMemory", VtValue(stats.mem_used)},
-          {"renderProgressAnnotation", VtValue(status)}};
+          {"renderProgressAnnotation", VtValue(status)},
+          {"resetsRequested", VtValue(_renderParam->session->get_reset_requests())},
+          {"resetsWritten", VtValue(_renderParam->resetsWritten.load())},
+          {"resetsConverged", VtValue(_renderParam->resetsConverged.load())}};
 }
 
 HdAovDescriptor HdCyclesDelegate::GetDefaultAovDescriptor(const TfToken &name) const

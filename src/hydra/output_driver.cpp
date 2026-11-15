@@ -6,6 +6,7 @@
 #include "hydra/output_driver.h"
 #include "hydra/render_buffer.h"
 #include "hydra/session.h"
+#include "session/session.h"
 
 HDCYCLES_NAMESPACE_OPEN_SCOPE
 
@@ -80,6 +81,9 @@ void HdCyclesOutputDriver::write_render_tile(const Tile &tile)
   const thread_scoped_lock lock = _renderParam->LockAovBindings();
 
   updateAovBuffers(_renderParam, tile);
+  const uint64_t rendering = _renderParam->session->get_reset_rendering();
+  _renderParam->resetsWritten = rendering;
+  _renderParam->resetsConverged = rendering;
 
   // Update convergence state of all render buffers
   for (const HdRenderPassAovBinding &aovBinding : _renderParam->GetAovBindingsLocked()) {
@@ -94,6 +98,7 @@ bool HdCyclesOutputDriver::update_render_tile(const Tile &tile)
   const thread_scoped_lock lock = _renderParam->LockAovBindings();
 
   updateAovBuffers(_renderParam, tile);
+  _renderParam->resetsWritten = _renderParam->session->get_reset_rendering();
 
   return true;
 }

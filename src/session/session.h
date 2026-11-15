@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <atomic>
+#include <cstdint>
 #include <functional>
 
 #include "device/device.h"
@@ -141,6 +143,18 @@ class Session {
   bool ready_to_reset();
   void reset(const SessionParams &session_params, const BufferParams &buffer_params);
 
+  /* The resets asked of the session so far, and the latest of them its render is of. A reset
+   * takes effect on the session thread, at its next iteration: until then the render and the
+   * buffers it writes are of the scene before. */
+  uint64_t get_reset_requests() const
+  {
+    return reset_requests_.load();
+  }
+  uint64_t get_reset_rendering() const
+  {
+    return reset_rendering_.load();
+  }
+
   void set_pause(bool pause);
   void set_navigating(bool navigating);
 
@@ -179,6 +193,8 @@ class Session {
     SessionParams session_params;
     BufferParams buffer_params;
   } delayed_reset_;
+  std::atomic<uint64_t> reset_requests_{0};
+  std::atomic<uint64_t> reset_rendering_{0};
 
   void thread_run();
   void thread_render();

@@ -535,6 +535,7 @@ bool Session::delayed_reset_buffer_params()
 
   const thread_scoped_lock buffers_lock(buffers_mutex_);
   delayed_reset_.do_reset = false;
+  reset_rendering_ = reset_requests_.load();
 
   params = delayed_reset_.session_params;
   buffer_params_ = delayed_reset_.buffer_params;
@@ -590,6 +591,7 @@ void Session::reset(const SessionParams &session_params, const BufferParams &buf
     const thread_scoped_lock pause_lock(pause_mutex_);
 
     delayed_reset_.do_reset = true;
+    ++reset_requests_;
     delayed_reset_.session_params = session_params;
     delayed_reset_.buffer_params = buffer_params;
 
