@@ -24,6 +24,10 @@ class HdCyclesRenderPass final : public PXR_NS::HdRenderPass {
  private:
   void ResetConverged();
 
+  /* Rebuilds every material's AOV outputs and exports every geometry's primvars again, which
+   * Hydra syncs only when the scene changes, not when the requested AOVs do. */
+  void SyncAovOutputs(CCL_NS::Scene *scene);
+
   void _Execute(const PXR_NS::HdRenderPassStateSharedPtr &renderPassState,
                 const PXR_NS::TfTokenVector &renderTags) override;
 

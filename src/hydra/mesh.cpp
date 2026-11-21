@@ -209,7 +209,7 @@ void HdCyclesMesh::Populate(HdSceneDelegate *sceneDelegate, HdDirtyBits dirtyBit
 
   // Must happen after topology update, so that appropriate attribute set can be selected
   if (dirtyBits & HdChangeTracker::DirtyPrimvar) {
-    PopulatePrimvars(sceneDelegate);
+    PopulatePrimvars(GetPrim(sceneDelegate, GetId()));
   }
 
   rebuild = (_geom->triangles_is_modified()) || (_geom->subd_start_corner_is_modified()) ||
@@ -308,14 +308,11 @@ void HdCyclesMesh::PopulateNormals(HdSceneDelegate *sceneDelegate)
   }
 }
 
-void HdCyclesMesh::PopulatePrimvars(HdSceneDelegate *sceneDelegate)
+void HdCyclesMesh::PopulatePrimvars(const HdSceneIndexPrim &prim)
 {
-  Scene *const scene = (Scene *)_geom->get_owner();
-
   const bool subdivision = _geom->get_subdivision_type() != Mesh::SUBDIVISION_NONE;
   AttributeSet &attributes = subdivision ? _geom->subd_attributes : _geom->attributes;
 
-  const HdSceneIndexPrim prim = GetPrim(sceneDelegate, GetId());
   const HdPrimvarsSchema primvars = HdPrimvarsSchema::GetFromParent(prim.dataSource);
 
   const std::pair<HdInterpolation, AttributeElement> interpolations[] = {
@@ -365,9 +362,7 @@ void HdCyclesMesh::PopulatePrimvars(HdSceneDelegate *sceneDelegate)
       }
 
       // Skip attributes that are not needed
-      if ((std != ATTR_STD_NONE && _geom->need_attribute(scene, std)) ||
-          _geom->need_attribute(scene, name))
-      {
+      if (NeedsPrimvar(name, std)) {
         const HdType valueType = HdGetValueTupleType(value).type;
 
         if (!subdivision) {

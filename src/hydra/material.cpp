@@ -24,6 +24,7 @@
 #include <pxr/imaging/hd/materialNodeParameterSchema.h>
 #include <pxr/imaging/hd/materialNodeSchema.h>
 #include <pxr/imaging/hd/materialSchema.h>
+#include <pxr/imaging/hd/renderIndex.h>
 #include <pxr/imaging/hd/sceneDelegate.h>
 
 HDCYCLES_NAMESPACE_OPEN_SCOPE
@@ -270,6 +271,21 @@ TfStaticData<UsdToCycles> sUsdToCyles;
 
 }  // namespace
 
+namespace {
+
+/* Prefer cycles network if it exists, otherwise use universal network. */
+HdMaterialNetworkSchema MaterialNetwork(const HdContainerDataSourceHandle &primDs)
+{
+  const HdMaterialSchema matSchema = HdMaterialSchema::GetFromParent(primDs);
+  HdMaterialNetworkSchema network = matSchema.GetMaterialNetwork(CyclesMaterialTokens->cycles);
+  if (!network) {
+    network = matSchema.GetMaterialNetwork();
+  }
+  return network;
+}
+
+}  // namespace
+
 HdCyclesMaterial::HdCyclesMaterial(const SdfPath &sprimId) : HdMaterial(sprimId) {}
 
 HdCyclesMaterial::~HdCyclesMaterial() = default;
@@ -300,12 +316,7 @@ void HdCyclesMaterial::Sync(HdSceneDelegate *sceneDelegate,
     const HdSceneIndexPrim prim = GetPrim(sceneDelegate, id);
     const HdContainerDataSourceHandle &primDs = prim.dataSource;
 
-    HdMaterialSchema matSchema = HdMaterialSchema::GetFromParent(primDs);
-    /* Prefer cycles network if it exists, otherwise use universal network. */
-    HdMaterialNetworkSchema network = matSchema.GetMaterialNetwork(CyclesMaterialTokens->cycles);
-    if (!network) {
-      network = matSchema.GetMaterialNetwork();
-    }
+    const HdMaterialNetworkSchema network = MaterialNetwork(primDs);
 
     if (network) {
       if (!_nodes.empty() && !dirtyResource) {
@@ -575,7 +586,7 @@ void HdCyclesMaterial::UpdateConnections(NodeDesc &nodeDesc,
   }
 }
 
-static void CreateInstanceIdAov(ShaderGraph *graph)
+void HdCyclesCreateAovOutputs(ShaderGraph *graph, const std::vector<ustring> &primvarAovs)
 {
   const ustring instanceId(HdAovTokens->instanceId.GetString());
 
@@ -586,6 +597,23 @@ static void CreateInstanceIdAov(ShaderGraph *graph)
   instanceIdNode->set_attribute(instanceId);
 
   graph->connect(instanceIdNode->output("Fac"), aovNode->input("Value"));
+
+  for (const ustring &primvar : primvarAovs) {
+    OutputAOVNode *primvarAov = graph->create_node<OutputAOVNode>();
+    primvarAov->set_name(ustring("primvars:" + primvar.string()));
+
+    AttributeNode *attribute = graph->create_node<AttributeNode>();
+    attribute->set_attribute(primvar);
+
+    // Both are connected: the pass the session made for the AOV decides which one is written
+    graph->connect(attribute->output("Color"), primvarAov->input("Color"));
+    graph->connect(attribute->output("Fac"), primvarAov->input("Value"));
+  }
+}
+
+std::vector<ustring> HdCyclesMaterial::PrimvarAovs() const
+{
+  return _session ? _session->GetPrimvarAovs() : std::vector<ustring>();
 }
 
 void HdCyclesMaterial::PopulateShaderGraph(HdMaterialNetworkSchema network)
@@ -739,14 +767,14 @@ void HdCyclesMaterial::PopulateShaderGraph(HdMaterialNetworkSchema network)
     graph->connect(output, input);
   }
 
-  CreateInstanceIdAov(graph.get());
+  HdCyclesCreateAovOutputs(graph.get(), PrimvarAovs());
 
   _shader->set_graph(std::move(graph));
 }
 
-void HdCyclesMaterial::PopulateFallbackShaderGraph()
+void HdCyclesMaterial::PopulateFallbackShaderGraph(const bool rebuild)
 {
-  if (_shader->graph && _nodes.empty()) {
+  if (!rebuild && _shader->graph && _nodes.empty()) {
     return;
   }
 
@@ -763,10 +791,33 @@ void HdCyclesMaterial::PopulateFallbackShaderGraph()
   graph->connect(objectNode->output("Color"), diffuseNode->input("Color"));
   graph->connect(diffuseNode->output("BSDF"), graph->output()->input("Surface"));
 
-  CreateInstanceIdAov(graph.get());
+  HdCyclesCreateAovOutputs(graph.get(), PrimvarAovs());
 
   _shader->set_graph(std::move(graph));
   _shader->tag_modified();
+}
+
+void HdCyclesMaterial::SyncAovOutputs(const HdRenderIndex &renderIndex, Scene *scene)
+{
+  if (!_shader) {
+    return;
+  }
+
+  const HdSceneIndexBaseRefPtr sceneIndex = renderIndex.GetTerminalSceneIndex();
+  if (!sceneIndex) {
+    return;
+  }
+
+  const HdMaterialNetworkSchema network = MaterialNetwork(sceneIndex->GetPrim(GetId()).dataSource);
+  if (network) {
+    PopulateShaderGraph(network);
+    _shader->tag_modified();
+  }
+  else {
+    PopulateFallbackShaderGraph(true);
+  }
+
+  _shader->tag_update(scene);
 }
 
 void HdCyclesMaterial::Finalize(HdRenderParam *renderParam)
@@ -788,6 +839,8 @@ void HdCyclesMaterial::Finalize(HdRenderParam *renderParam)
 
 void HdCyclesMaterial::Initialize(HdRenderParam *renderParam)
 {
+  _session = static_cast<const HdCyclesSession *>(renderParam);
+
   if (_shader) {
     return;
   }

@@ -6,13 +6,25 @@
 #pragma once
 
 #include "hydra/config.h"
+#include "util/param.h"
+
+#include <vector>
 
 #include <pxr/imaging/hd/material.h>
 #include <pxr/imaging/hd/materialNetworkSchema.h>
 #include <pxr/imaging/hd/materialNodeParameterSchema.h>
 #include <pxr/imaging/hd/materialNodeSchema.h>
 
+PXR_NAMESPACE_OPEN_SCOPE
+class HdRenderIndex;
+PXR_NAMESPACE_CLOSE_SCOPE
+
 HDCYCLES_NAMESPACE_OPEN_SCOPE
+
+/* Adds the AOV outputs every surface graph has: the instanceId AOV, and one per primvar AOV
+ * that writes the primvar under the name `primvars:<name>`. */
+void HdCyclesCreateAovOutputs(CCL_NS::ShaderGraph *graph,
+                              const std::vector<CCL_NS::ustring> &primvarAovs);
 
 class HdCyclesMaterial final : public PXR_NS::HdMaterial {
  public:
@@ -31,6 +43,10 @@ class HdCyclesMaterial final : public PXR_NS::HdMaterial {
   {
     return _shader;
   }
+
+  /* Rebuilds the shader graph from the render index's scene, after the primvar AOVs the session
+   * renders changed. The caller holds the scene lock. */
+  void SyncAovOutputs(const PXR_NS::HdRenderIndex &renderIndex, CCL_NS::Scene *scene);
 
  private:
   struct NodeDesc {
@@ -58,8 +74,11 @@ class HdCyclesMaterial final : public PXR_NS::HdMaterial {
                          CCL_NS::ShaderGraph *shaderGraph);
 
   void PopulateShaderGraph(PXR_NS::HdMaterialNetworkSchema network);
-  void PopulateFallbackShaderGraph();
+  void PopulateFallbackShaderGraph(bool rebuild = false);
 
+  std::vector<CCL_NS::ustring> PrimvarAovs() const;
+
+  const HdCyclesSession *_session = nullptr;
   CCL_NS::Shader *_shader = nullptr;
   std::unordered_map<PXR_NS::SdfPath, NodeDesc, PXR_NS::SdfPath::Hash> _nodes;
 };

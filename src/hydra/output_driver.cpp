@@ -53,7 +53,6 @@ void updateAovBuffers(const HdCyclesSession *renderParam, const OutputDriver::Ti
         pixels.resize(channels * tile.size.x * tile.size.y);
         if (tile.get_pass_pixels(aovBinding.aovName.GetString(), channels, pixels.data())) {
           const bool isId = aovBinding.aovName == HdAovTokens->primId ||
-                            aovBinding.aovName == HdAovTokens->elementId ||
                             aovBinding.aovName == HdAovTokens->instanceId;
           renderBuffer->Map();
           renderBuffer->WritePixels(pixels.data(),
@@ -64,10 +63,7 @@ void updateAovBuffers(const HdCyclesSession *renderParam, const OutputDriver::Ti
           renderBuffer->Unmap();
         }
         else {
-          // Do not warn on missing elementId, which is a standard AOV but is not implememted
-          if (aovBinding.aovName != HdAovTokens->elementId) {
-            TF_RUNTIME_ERROR("Could not find pass for AOV '%s'", aovBinding.aovName.GetText());
-          }
+          TF_RUNTIME_ERROR("Could not find pass for AOV '%s'", aovBinding.aovName.GetText());
         }
       }
     }

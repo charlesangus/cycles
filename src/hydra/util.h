@@ -8,6 +8,8 @@
 #include "hydra/config.h"
 #include "scene/attribute.h"
 
+#include <string>
+
 #include <pxr/base/vt/value.h>
 #include <pxr/imaging/hd/dataSource.h>
 #include <pxr/imaging/hd/enums.h>
@@ -26,6 +28,10 @@ HDCYCLES_NAMESPACE_OPEN_SCOPE
 
 /* Prim data source from the scene index, or empty if none is reachable. */
 PXR_NS::HdSceneIndexPrim GetPrim(PXR_NS::HdSceneDelegate *delegate, const PXR_NS::SdfPath &id);
+
+/* The name a light group attribute holds: a string or token, or an array of one. Empty for
+ * any other value. */
+std::string LightgroupName(const PXR_NS::VtValue &value);
 
 /* Typed child data source, or null if missing or of a different type. */
 template<typename T>

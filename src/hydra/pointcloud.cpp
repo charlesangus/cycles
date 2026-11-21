@@ -52,7 +52,7 @@ void HdCyclesPoints::Populate(HdSceneDelegate *sceneDelegate, HdDirtyBits dirtyB
   }
 
   if (dirtyBits & HdChangeTracker::DirtyPrimvar) {
-    PopulatePrimvars(sceneDelegate);
+    PopulatePrimvars(GetPrim(sceneDelegate, GetId()));
   }
 }
 
@@ -110,11 +110,8 @@ void HdCyclesPoints::PopulateWidths(HdSceneDelegate *sceneDelegate)
   }
 }
 
-void HdCyclesPoints::PopulatePrimvars(HdSceneDelegate *sceneDelegate)
+void HdCyclesPoints::PopulatePrimvars(const HdSceneIndexPrim &prim)
 {
-  Scene *const scene = (Scene *)_geom->get_owner();
-
-  const HdSceneIndexPrim prim = GetPrim(sceneDelegate, GetId());
   const HdPrimvarsSchema primvars = HdPrimvarsSchema::GetFromParent(prim.dataSource);
 
   const std::pair<HdInterpolation, AttributeElement> interpolations[] = {
@@ -159,9 +156,7 @@ void HdCyclesPoints::PopulatePrimvars(HdSceneDelegate *sceneDelegate)
       }
 
       // Skip attributes that are not needed
-      if ((std != ATTR_STD_NONE && _geom->need_attribute(scene, std)) ||
-          _geom->need_attribute(scene, name))
-      {
+      if (NeedsPrimvar(name, std)) {
         ApplyPrimvars(_geom->attributes, name, value, interpolation.second, std);
       }
     }
