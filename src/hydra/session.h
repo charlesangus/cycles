@@ -72,6 +72,10 @@ class HdCyclesSession final : public PXR_NS::HdRenderParam {
    * the lights; nullopt goes back to that default. The caller holds the scene lock. */
   void SetBackgroundTransparent(std::optional<bool> transparent);
 
+  /* An explicit background light group, which wins over the dome light's group UpdateScene()
+   * picks; nullopt goes back to that group. The caller holds the scene lock. */
+  void SetBackgroundLightgroup(std::optional<CCL_NS::ustring> lightgroup);
+
   double GetStageMetersPerUnit() const
   {
     return _stageMetersPerUnit;
@@ -158,6 +162,7 @@ class HdCyclesSession final : public PXR_NS::HdRenderParam {
   std::vector<CCL_NS::ustring> _primvarAovs;
   bool _uvPass = false;
   std::optional<bool> _backgroundTransparent;
+  std::optional<CCL_NS::ustring> _backgroundLightgroup;
   bool _defaultBackgroundTransparent = false;
 };
 
