@@ -122,6 +122,10 @@ HdCyclesAovPass HdCyclesPassForAov(const TfToken &aovName)
     pass.channels = Pass::get_info(pass.type, PassMode::DENOISED, false, !pass.lightgroup.empty())
                         .num_components;
   }
+  // A primvar renders to Cycles' four-component AOV colour, of which only the colour is filled
+  if (!pass.primvar.empty()) {
+    pass.channels = 3;
+  }
 
   return pass;
 }
@@ -209,7 +213,7 @@ void HdCyclesSession::UpdateScene()
       }
     }
 
-    scene->background->set_lightgroup(background_lightgroup);
+    scene->background->set_lightgroup(_backgroundLightgroup.value_or(background_lightgroup));
 
     if (!background_light) {
       scene->background->set_shader(scene->default_background);
@@ -240,6 +244,19 @@ void HdCyclesSession::SetBackgroundTransparent(const std::optional<bool> transpa
   _backgroundTransparent = transparent;
   session->scene->background->set_transparent(
       _backgroundTransparent.value_or(_defaultBackgroundTransparent));
+}
+
+void HdCyclesSession::SetBackgroundLightgroup(const std::optional<ustring> lightgroup)
+{
+  Scene *const scene = session->scene.get();
+  if (lightgroup) {
+    scene->background->set_lightgroup(*lightgroup);
+  }
+  else if (_backgroundLightgroup) {
+    // The dome light's group comes back when the light manager next updates
+    scene->light_manager->tag_update(scene, LightManager::LIGHT_MODIFIED);
+  }
+  _backgroundLightgroup = lightgroup;
 }
 
 bool HdCyclesSession::SyncAovBindings(const HdRenderPassAovBindingVector &aovBindings)

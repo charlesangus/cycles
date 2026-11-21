@@ -525,6 +525,16 @@ void HdCyclesDelegate::SetRenderSetting(const PXR_NS::TfToken &key, const PXR_NS
           _renderParam->SetBackgroundTransparent(scene->background->get_transparent());
         }
       }
+      else if (node == scene->background && socket->name == "lightgroup") {
+        // An empty value goes back to the dome light's group
+        if (value.IsEmpty()) {
+          _renderParam->SetBackgroundLightgroup(std::nullopt);
+        }
+        else {
+          SetNodeValue(node, *socket, value);
+          _renderParam->SetBackgroundLightgroup(scene->background->get_lightgroup());
+        }
+      }
       else {
         SetNodeValue(node, *socket, value);
       }

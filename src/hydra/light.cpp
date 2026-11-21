@@ -173,11 +173,19 @@ void HdCyclesLight::Sync(HdSceneDelegate *sceneDelegate,
     _light->set_strength(strength);
     _light->set_is_enabled(visible);
 
-    /* A light input, `inputs:cycles:lightgroup`, wins over the primvar geometry reads. */
+    /* A light input, `inputs:cycles:lightgroup`, wins over the primvar geometry reads. The USD
+     * light data source looks unrecognised names up as attribute names, so the input is asked
+     * for by its full name; the bare name covers delegates that strip the `inputs:` prefix. */
     static const TfToken lightgroupToken("cycles:lightgroup", TfToken::Immortal);
+    static const TfToken lightgroupInputToken("inputs:cycles:lightgroup", TfToken::Immortal);
     std::string lightgroup;
-    if (auto ds = HdSampledDataSource::Cast(lightDs ? lightDs->Get(lightgroupToken) : nullptr)) {
-      lightgroup = LightgroupName(ds->GetValue(0.0f));
+    for (const TfToken &name : {lightgroupInputToken, lightgroupToken}) {
+      if (auto ds = HdSampledDataSource::Cast(lightDs ? lightDs->Get(name) : nullptr)) {
+        lightgroup = LightgroupName(ds->GetValue(0.0f));
+      }
+      if (!lightgroup.empty()) {
+        break;
+      }
     }
     if (lightgroup.empty()) {
       lightgroup = LightgroupName(
