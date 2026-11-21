@@ -52,7 +52,7 @@ void HdCyclesCurves::Populate(HdSceneDelegate *sceneDelegate, HdDirtyBits dirtyB
   }
 
   if (dirtyBits & HdChangeTracker::DirtyPrimvar) {
-    PopulatePrimvars(sceneDelegate);
+    PopulatePrimvars(GetPrim(sceneDelegate, GetId()));
   }
 
   rebuild = (_geom->position_is_modified()) || (_geom->radius_is_modified());
@@ -113,11 +113,8 @@ void HdCyclesCurves::PopulateWidths(HdSceneDelegate *sceneDelegate)
   }
 }
 
-void HdCyclesCurves::PopulatePrimvars(HdSceneDelegate *sceneDelegate)
+void HdCyclesCurves::PopulatePrimvars(const HdSceneIndexPrim &prim)
 {
-  Scene *const scene = (Scene *)_geom->get_owner();
-
-  const HdSceneIndexPrim prim = GetPrim(sceneDelegate, GetId());
   const HdPrimvarsSchema primvars = HdPrimvarsSchema::GetFromParent(prim.dataSource);
 
   const std::pair<HdInterpolation, AttributeElement> interpolations[] = {
@@ -159,9 +156,7 @@ void HdCyclesCurves::PopulatePrimvars(HdSceneDelegate *sceneDelegate)
       }
 
       // Skip attributes that are not needed
-      if ((std != ATTR_STD_NONE && _geom->need_attribute(scene, std)) ||
-          _geom->need_attribute(scene, name))
-      {
+      if (NeedsPrimvar(name, std)) {
         AttributeElement elem = interpolation.second;
         if (std == ATTR_STD_VERTEX_NORMAL) {
           elem = ATTR_ELEMENT_CURVE_KEY_NORMAL;

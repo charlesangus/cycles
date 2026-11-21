@@ -410,7 +410,8 @@ VtDictionary HdCyclesDelegate::GetRenderStats() const
           {"renderProgressAnnotation", VtValue(status)},
           {"resetsRequested", VtValue(_renderParam->session->get_reset_requests())},
           {"resetsWritten", VtValue(_renderParam->resetsWritten.load())},
-          {"resetsConverged", VtValue(_renderParam->resetsConverged.load())}};
+          {"resetsConverged", VtValue(_renderParam->resetsConverged.load())},
+          {"aovNames", VtValue(HdCyclesAovNames())}};
 }
 
 HdAovDescriptor HdCyclesDelegate::GetDefaultAovDescriptor(const TfToken &name) const
@@ -430,13 +431,20 @@ HdAovDescriptor HdCyclesDelegate::GetDefaultAovDescriptor(const TfToken &name) c
   if (name == HdAovTokens->normal) {
     return HdAovDescriptor(HdFormatFloat32Vec3, false, VtValue(GfVec3f(0.0f)));
   }
-  if (name == HdAovTokens->primId || name == HdAovTokens->instanceId ||
-      name == HdAovTokens->elementId)
-  {
+  if (name == HdAovTokens->primId || name == HdAovTokens->instanceId) {
     return HdAovDescriptor(HdFormatInt32, false, VtValue(-1));
   }
 
-  return HdAovDescriptor();
+  switch (HdCyclesPassForAov(name).channels) {
+    case 1:
+      return HdAovDescriptor(HdFormatFloat32, false, VtValue(0.0f));
+    case 3:
+      return HdAovDescriptor(HdFormatFloat32Vec3, false, VtValue(GfVec3f(0.0f)));
+    case 4:
+      return HdAovDescriptor(HdFormatFloat32Vec4, false, VtValue(GfVec4f(0.0f)));
+    default:
+      return HdAovDescriptor();
+  }
 }
 
 HdRenderSettingDescriptorList HdCyclesDelegate::GetRenderSettingDescriptors() const

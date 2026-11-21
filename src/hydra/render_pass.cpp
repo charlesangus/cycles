@@ -5,6 +5,8 @@
 
 #include "hydra/render_pass.h"
 #include "hydra/camera.h"
+#include "hydra/geometry.h"
+#include "hydra/material.h"
 #include "hydra/output_driver.h"
 #include "hydra/render_buffer.h"
 #include "hydra/render_delegate.h"
@@ -20,7 +22,9 @@
 
 #include "session/session.h"
 
+#include <pxr/imaging/hd/renderIndex.h>
 #include <pxr/imaging/hd/renderPassState.h>
+#include <pxr/imaging/hd/tokens.h>
 
 HDCYCLES_NAMESPACE_OPEN_SCOPE
 
@@ -71,6 +75,32 @@ void HdCyclesRenderPass::ResetConverged()
   }
 }
 
+void HdCyclesRenderPass::SyncAovOutputs(Scene *scene)
+{
+  HdRenderIndex *const renderIndex = GetRenderIndex();
+
+  // Materials first: the attributes their shaders read decide what geometry exports
+  for (const SdfPath &id :
+       renderIndex->GetSprimSubtree(HdPrimTypeTokens->material, SdfPath::AbsoluteRootPath()))
+  {
+    if (auto *const material = static_cast<HdCyclesMaterial *>(
+            renderIndex->GetSprim(HdPrimTypeTokens->material, id)))
+    {
+      material->SyncAovOutputs(*renderIndex, scene);
+    }
+  }
+
+  for (const SdfPath &id : renderIndex->GetRprimIds()) {
+    // The render index hands its rprims out const, but this delegate made them and holds the
+    // scene lock they sync under
+    if (auto *const geometry = dynamic_cast<HdCyclesPrimvarSync *>(
+            const_cast<HdRprim *>(renderIndex->GetRprim(id))))
+    {
+      geometry->SyncAovPrimvars(*renderIndex);
+    }
+  }
+}
+
 void HdCyclesRenderPass::_Execute(const HdRenderPassStateSharedPtr &renderPassState,
                                   const TfTokenVector & /*renderTags*/)
 {
@@ -93,7 +123,9 @@ void HdCyclesRenderPass::_Execute(const HdRenderPassStateSharedPtr &renderPassSt
         // Need to resync passes when denoising is enabled or disabled to update the pass mode
         (settingsVersion != _lastSettingsVersion && scene->integrator->use_denoise_is_modified()))
     {
-      _renderParam->SyncAovBindings(aovBindings);
+      if (_renderParam->SyncAovBindings(aovBindings)) {
+        SyncAovOutputs(scene);
+      }
 
       if (renderDelegate->IsDisplaySupported()) {
         // Update display pass to the first requested color AOV

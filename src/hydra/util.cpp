@@ -10,6 +10,7 @@
 #include <pxr/base/gf/vec3f.h>
 #include <pxr/base/gf/vec4f.h>
 #include <pxr/base/vt/array.h>
+#include <pxr/base/vt/types.h>
 #include <pxr/imaging/hd/primvarSchema.h>
 #include <pxr/imaging/hd/renderIndex.h>
 #include <pxr/imaging/hd/sceneDelegate.h>
@@ -27,6 +28,23 @@ HdSceneIndexPrim GetPrim(HdSceneDelegate *delegate, const SdfPath &id)
     return {};
   }
   return si->GetPrim(id);
+}
+
+std::string LightgroupName(const VtValue &value)
+{
+  if (value.IsHolding<std::string>()) {
+    return value.UncheckedGet<std::string>();
+  }
+  if (value.IsHolding<TfToken>()) {
+    return value.UncheckedGet<TfToken>().GetString();
+  }
+  if (value.IsHolding<VtStringArray>() && value.GetArraySize() == 1) {
+    return value.UncheckedGet<VtStringArray>()[0];
+  }
+  if (value.IsHolding<VtTokenArray>() && value.GetArraySize() == 1) {
+    return value.UncheckedGet<VtTokenArray>()[0].GetString();
+  }
+  return std::string();
 }
 
 VtValue ReadPrimvar(const HdPrimvarsSchema &primvars, const TfToken &name)

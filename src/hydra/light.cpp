@@ -17,6 +17,7 @@
 #include "util/transform.h"
 
 #include <pxr/imaging/hd/lightSchema.h>
+#include <pxr/imaging/hd/primvarsSchema.h>
 #include <pxr/imaging/hd/sceneDelegate.h>
 #include <pxr/imaging/hd/visibilitySchema.h>
 #include <pxr/imaging/hd/xformSchema.h>
@@ -171,6 +172,23 @@ void HdCyclesLight::Sync(HdSceneDelegate *sceneDelegate,
 
     _light->set_strength(strength);
     _light->set_is_enabled(visible);
+
+    /* A light input, `inputs:cycles:lightgroup`, wins over the primvar geometry reads. */
+    static const TfToken lightgroupToken("cycles:lightgroup", TfToken::Immortal);
+    std::string lightgroup;
+    if (auto ds = HdSampledDataSource::Cast(lightDs ? lightDs->Get(lightgroupToken) : nullptr)) {
+      lightgroup = LightgroupName(ds->GetValue(0.0f));
+    }
+    if (lightgroup.empty()) {
+      lightgroup = LightgroupName(
+          ReadPrimvar(HdPrimvarsSchema::GetFromParent(primDs), lightgroupToken));
+    }
+    if (_object->get_lightgroup() != ustring(lightgroup)) {
+      _object->set_lightgroup(ustring(lightgroup));
+      _object->tag_update(lock.scene);
+      // The background takes a dome light's group when the light manager updates
+      lock.scene->light_manager->tag_update(lock.scene, LightManager::LIGHT_MODIFIED);
+    }
 
     PopulateShaderGraph(lightDs);
   }

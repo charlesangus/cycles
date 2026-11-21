@@ -15,6 +15,8 @@
 
 #include <pxr/imaging/hd/materialBindingSchema.h>
 #include <pxr/imaging/hd/materialBindingsSchema.h>
+#include <pxr/imaging/hd/primvarsSchema.h>
+#include <pxr/imaging/hd/renderIndex.h>
 #include <pxr/imaging/hd/sceneDelegate.h>
 #include <pxr/imaging/hd/tokens.h>
 #include <pxr/imaging/hd/xformSchema.h>
@@ -64,6 +66,7 @@ void HdCyclesGeometry<Base, CyclesBase>::Sync(HdSceneDelegate *sceneDelegate,
   }
 
   Initialize(renderParam);
+  _session = static_cast<const HdCyclesSession *>(renderParam);
 
   Base::_UpdateInstancer(sceneDelegate, dirtyBits);
   HdInstancer::_SyncInstancerAndParents(sceneDelegate->GetRenderIndex(), Base::GetInstancerId());
@@ -167,6 +170,10 @@ void HdCyclesGeometry<Base, CyclesBase>::Sync(HdSceneDelegate *sceneDelegate,
     }
   }
 
+  if (*dirtyBits & HdChangeTracker::DirtyPrimvar) {
+    PopulateLightgroup(primDs);
+  }
+
   // Must happen after material ID update, so that attribute decisions can be made
   // based on it (e.g. check whether an attribute is actually needed)
   bool rebuild = false;
@@ -181,6 +188,50 @@ void HdCyclesGeometry<Base, CyclesBase>::Sync(HdSceneDelegate *sceneDelegate,
   }
 
   *dirtyBits = HdChangeTracker::Clean;
+}
+
+template<typename Base, typename CyclesBase>
+void HdCyclesGeometry<Base, CyclesBase>::SyncAovPrimvars(const HdRenderIndex &renderIndex)
+{
+  if (!_geom) {
+    return;
+  }
+
+  const HdSceneIndexBaseRefPtr sceneIndex = renderIndex.GetTerminalSceneIndex();
+  if (!sceneIndex) {
+    return;
+  }
+
+  PopulatePrimvars(sceneIndex->GetPrim(Base::GetId()));
+
+  if (_geom->is_modified()) {
+    _geom->tag_update((Scene *)_geom->get_owner(), false);
+  }
+}
+
+template<typename Base, typename CyclesBase>
+bool HdCyclesGeometry<Base, CyclesBase>::NeedsPrimvar(const ustring name,
+                                                      const AttributeStandard std) const
+{
+  Scene *const scene = (Scene *)_geom->get_owner();
+
+  return (std != ATTR_STD_NONE && _geom->need_attribute(scene, std)) ||
+         _geom->need_attribute(scene, name) || (_session && _session->AovsNeedPrimvar(name, std));
+}
+
+/* The light group is a constant string or token primvar, `primvars:cycles:lightgroup`. */
+template<typename Base, typename CyclesBase>
+void HdCyclesGeometry<Base, CyclesBase>::PopulateLightgroup(
+    const HdContainerDataSourceHandle &primDs)
+{
+  static const TfToken lightgroupToken("cycles:lightgroup", TfToken::Immortal);
+
+  const VtValue value = ReadPrimvar(HdPrimvarsSchema::GetFromParent(primDs), lightgroupToken);
+  _lightgroup = ustring(LightgroupName(value));
+
+  for (Object *instance : _instances) {
+    instance->set_lightgroup(_lightgroup);
+  }
 }
 
 template<typename Base, typename CyclesBase>
@@ -233,6 +284,7 @@ void HdCyclesGeometry<Base, CyclesBase>::InitializeInstance(int index)
                                     _instances.size() == 1 ? -1.0f : static_cast<float>(index));
 
   instance->set_color(make_float3(0.8f, 0.8f, 0.8f));
+  instance->set_lightgroup(_lightgroup);
   instance->set_random_id(hash_uint2(hash_string(_geom->name.c_str()), index));
 }
 

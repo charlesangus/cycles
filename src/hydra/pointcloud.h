@@ -29,7 +29,7 @@ class HdCyclesPoints final : public HdCyclesGeometry<PXR_NS::HdPoints, CCL_NS::P
   void PopulatePoints(PXR_NS::HdSceneDelegate *sceneDelegate);
   void PopulateWidths(PXR_NS::HdSceneDelegate *sceneDelegate);
 
-  void PopulatePrimvars(PXR_NS::HdSceneDelegate *sceneDelegate);
+  void PopulatePrimvars(const PXR_NS::HdSceneIndexPrim &prim) override;
 };
 
 HDCYCLES_NAMESPACE_CLOSE_SCOPE

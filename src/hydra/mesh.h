@@ -32,7 +32,7 @@ class HdCyclesMesh final : public HdCyclesGeometry<PXR_NS::HdMesh, CCL_NS::Mesh>
   void PopulatePoints(PXR_NS::HdSceneDelegate *sceneDelegate);
   void PopulateNormals(PXR_NS::HdSceneDelegate *sceneDelegate);
 
-  void PopulatePrimvars(PXR_NS::HdSceneDelegate *sceneDelegate);
+  void PopulatePrimvars(const PXR_NS::HdSceneIndexPrim &prim) override;
 
   void PopulateTopology(PXR_NS::HdSceneDelegate *sceneDelegate);
 
