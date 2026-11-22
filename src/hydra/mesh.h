@@ -36,6 +36,11 @@ class HdCyclesMesh final : public HdCyclesGeometry<PXR_NS::HdMesh, CCL_NS::Mesh>
 
   void PopulateTopology(PXR_NS::HdSceneDelegate *sceneDelegate);
 
+  // The dicing rate and subdivision level cap, after the mesh's own primvars
+  void ComputeDicing(PXR_NS::HdSceneDelegate *sceneDelegate,
+                     float &dicingRate,
+                     int &maxLevel) const;
+
   PXR_NS::HdMeshUtil _util;
   PXR_NS::HdMeshTopology _topology;
   PXR_NS::VtIntArray _primitiveParams;

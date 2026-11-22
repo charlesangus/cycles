@@ -8,6 +8,7 @@
 #include "hydra/config.h"
 
 #include <pxr/imaging/hd/renderPass.h>
+#include <pxr/usd/sdf/path.h>
 
 HDCYCLES_NAMESPACE_OPEN_SCOPE
 
@@ -28,8 +29,12 @@ class HdCyclesRenderPass final : public PXR_NS::HdRenderPass {
 
   void _MarkCollectionDirty() override;
 
+  void _Sync() override;
+
   HdCyclesSession *_renderParam;
   unsigned int _lastSettingsVersion = 0;
+  unsigned int _lastSubdivisionVersion = 0;
+  PXR_NS::SdfPath _warnedDicingCamera;
 };
 
 HDCYCLES_NAMESPACE_CLOSE_SCOPE

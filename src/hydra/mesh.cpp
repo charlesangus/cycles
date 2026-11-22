@@ -5,8 +5,11 @@
 
 #include "hydra/mesh.h"
 #include "hydra/geometry.inl"
+#include "hydra/session.h"
 #include "hydra/util.h"
 #include "scene/mesh.h"
+
+#include <optional>
 
 #include <pxr/base/gf/vec2f.h>
 #include <pxr/imaging/hd/geomSubsetSchema.h>
@@ -74,6 +77,50 @@ VtValue ComputeTriangulatedFaceVaryingPrimvar(VtValue value,
   return VtValue();
 }
 
+const HdCyclesSubdivisionSettings &SubdivisionSettings(HdSceneDelegate *sceneDelegate)
+{
+  static const HdCyclesSubdivisionSettings defaults;
+  const auto *const session = static_cast<const HdCyclesSession *>(
+      sceneDelegate->GetRenderIndex().GetRenderDelegate()->GetRenderParam());
+  return session ? session->subdivision : defaults;
+}
+
+// A number or a one-element array of one, as a constant primvar may be authored
+std::optional<double> ConstantNumber(const VtValue &value)
+{
+  if (value.IsHolding<float>()) {
+    return value.UncheckedGet<float>();
+  }
+  if (value.IsHolding<double>()) {
+    return value.UncheckedGet<double>();
+  }
+  if (value.IsHolding<int>()) {
+    return value.UncheckedGet<int>();
+  }
+  if (value.IsHolding<VtFloatArray>() && value.GetArraySize() == 1) {
+    return value.UncheckedGet<VtFloatArray>()[0];
+  }
+  if (value.IsHolding<VtDoubleArray>() && value.GetArraySize() == 1) {
+    return value.UncheckedGet<VtDoubleArray>()[0];
+  }
+  if (value.IsHolding<VtIntArray>() && value.GetArraySize() == 1) {
+    return value.UncheckedGet<VtIntArray>()[0];
+  }
+  return std::nullopt;
+}
+
+const TfToken &DicingRatePrimvar()
+{
+  static const TfToken name("cycles:dicing_rate");
+  return name;
+}
+
+const TfToken &MaxLevelPrimvar()
+{
+  static const TfToken name("cycles:max_level");
+  return name;
+}
+
 }  // namespace
 
 Transform convert_transform(const GfMatrix4d &matrix)
@@ -134,6 +181,19 @@ HdDirtyBits HdCyclesMesh::_PropagateDirtyBits(HdDirtyBits bits) const
 
 void HdCyclesMesh::Populate(HdSceneDelegate *sceneDelegate, HdDirtyBits dirtyBits, bool &rebuild)
 {
+  // Dicing is set up with the topology, so a per-mesh dicing primvar that changes needs it again
+  if ((dirtyBits & HdChangeTracker::DirtyPrimvar) &&
+      _geom->get_subdivision_type() != Mesh::SUBDIVISION_NONE)
+  {
+    float dicingRate = 0.0f;
+    int maxLevel = 0;
+    ComputeDicing(sceneDelegate, dicingRate, maxLevel);
+    if (dicingRate != _geom->get_subd_dicing_rate() || maxLevel != _geom->get_subd_max_level()) {
+      dirtyBits |= HdChangeTracker::DirtyTopology | HdChangeTracker::DirtyPoints |
+                   HdChangeTracker::DirtyNormals;
+    }
+  }
+
   if (HdChangeTracker::IsTopologyDirty(dirtyBits, GetId())) {
     PopulateTopology(sceneDelegate);
   }
@@ -269,7 +329,9 @@ void HdCyclesMesh::PopulatePrimvars(HdSceneDelegate *sceneDelegate)
   for (const auto &interpolation : interpolations) {
     for (const TfToken &primvarName : PrimvarNamesAtInterpolation(primvars, interpolation.first)) {
       // Skip special primvars that are handled separately
-      if (primvarName == HdTokens->points || primvarName == HdTokens->normals) {
+      if (primvarName == HdTokens->points || primvarName == HdTokens->normals ||
+          primvarName == DicingRatePrimvar() || primvarName == MaxLevelPrimvar())
+      {
         continue;
       }
 
@@ -326,6 +388,43 @@ void HdCyclesMesh::PopulatePrimvars(HdSceneDelegate *sceneDelegate)
 
         ApplyPrimvars(attributes, name, value, interpolation.second, std);
       }
+    }
+  }
+}
+
+void HdCyclesMesh::ComputeDicing(HdSceneDelegate *sceneDelegate,
+                                 float &dicingRate,
+                                 int &maxLevel) const
+{
+  const HdCyclesSubdivisionSettings &settings = SubdivisionSettings(sceneDelegate);
+  dicingRate = settings.dicingRate;
+  maxLevel = settings.maxLevel;
+
+  const HdSceneIndexPrim prim = GetPrim(sceneDelegate, GetId());
+  const HdPrimvarsSchema primvars = HdPrimvarsSchema::GetFromParent(prim.dataSource);
+
+  if (const std::optional<double> scale = ConstantNumber(
+          ReadPrimvar(primvars, DicingRatePrimvar())))
+  {
+    if (*scale > 0.0) {
+      dicingRate *= static_cast<float>(*scale);
+    }
+    else {
+      TF_WARN("%s: ignoring %s, which must be above zero",
+              GetId().GetText(),
+              DicingRatePrimvar().GetText());
+    }
+  }
+
+  if (const std::optional<double> level = ConstantNumber(ReadPrimvar(primvars, MaxLevelPrimvar())))
+  {
+    if (*level >= 0.0) {
+      maxLevel = static_cast<int>(*level);
+    }
+    else {
+      TF_WARN("%s: ignoring %s, which must not be negative",
+              GetId().GetText(),
+              MaxLevelPrimvar().GetText());
     }
   }
 }
@@ -407,15 +506,25 @@ void HdCyclesMesh::PopulateTopology(HdSceneDelegate *sceneDelegate)
   }
   _topology.SetGeomSubsets(geomSubsetsList);
 
+  // Hydra's refine level is display complexity, which does not decide subdivision here
+  const HdCyclesSubdivisionSettings &subdivisionSettings = SubdivisionSettings(sceneDelegate);
   const TfToken subdivScheme = _topology.GetScheme();
-  if (subdivScheme == PxOsdOpenSubdivTokens->bilinear && _topology.GetRefineLevel() > 0) {
+  if (!subdivisionSettings.enabled || subdivScheme == PxOsdOpenSubdivTokens->none) {
+    _geom->set_subdivision_type(Mesh::SUBDIVISION_NONE);
+  }
+  else if (subdivScheme == PxOsdOpenSubdivTokens->bilinear) {
     _geom->set_subdivision_type(Mesh::SUBDIVISION_LINEAR);
   }
-  else if (subdivScheme == PxOsdOpenSubdivTokens->catmullClark && _topology.GetRefineLevel() > 0) {
-    _geom->set_subdivision_type(Mesh::SUBDIVISION_CATMULL_CLARK);
-  }
   else {
-    _geom->set_subdivision_type(Mesh::SUBDIVISION_NONE);
+    if (subdivScheme == PxOsdOpenSubdivTokens->loop) {
+      TF_WARN("%s: Loop subdivision is rendered as Catmull-Clark", GetId().GetText());
+    }
+    else if (subdivScheme != PxOsdOpenSubdivTokens->catmullClark) {
+      TF_WARN("%s: unknown subdivision scheme %s is rendered as Catmull-Clark",
+              GetId().GetText(),
+              subdivScheme.GetText());
+    }
+    _geom->set_subdivision_type(Mesh::SUBDIVISION_CATMULL_CLARK);
   }
 
   const bool smooth = !flatShadingEnabled;
@@ -600,8 +709,14 @@ void HdCyclesMesh::PopulateTopology(HdSceneDelegate *sceneDelegate)
       }
     }
 
-    _geom->set_subd_dicing_rate(1.0f);
-    _geom->set_subd_max_level(_topology.GetRefineLevel());
+    float dicingRate = 0.0f;
+    int maxLevel = 0;
+    ComputeDicing(sceneDelegate, dicingRate, maxLevel);
+    _geom->set_subd_dicing_rate(dicingRate);
+    _geom->set_subd_max_level(maxLevel);
+    _geom->set_subd_adaptive_space(subdivisionSettings.objectSpace ?
+                                       Mesh::SUBDIVISION_ADAPTIVE_SPACE_OBJECT :
+                                       Mesh::SUBDIVISION_ADAPTIVE_SPACE_PIXEL);
     _geom->set_subd_objecttoworld(_instances[0]->get_tfm());
   }
 }

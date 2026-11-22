@@ -28,6 +28,7 @@
 #include <pxr/base/tf/getenv.h>
 #include <pxr/imaging/hgi/tokens.h>
 
+#include <optional>
 #include <string_view>
 
 HDCYCLES_NAMESPACE_OPEN_SCOPE
@@ -179,6 +180,51 @@ const SocketType *FindSettingSocket(Scene *scene, const std::string &key, Node *
   }
   *node = found;
   return socket;
+}
+
+std::optional<SdfPath> PathFromValue(const VtValue &value)
+{
+  if (value.IsEmpty()) {
+    return SdfPath();
+  }
+  if (value.IsHolding<SdfPath>()) {
+    return value.UncheckedGet<SdfPath>();
+  }
+  std::string text;
+  if (value.IsHolding<std::string>()) {
+    text = value.UncheckedGet<std::string>();
+  }
+  else if (value.IsHolding<TfToken>()) {
+    text = value.UncheckedGet<TfToken>().GetString();
+  }
+  else {
+    return std::nullopt;
+  }
+  if (text.empty()) {
+    return SdfPath();
+  }
+  if (!SdfPath::IsValidPathString(text)) {
+    return std::nullopt;
+  }
+  return SdfPath(text);
+}
+
+std::optional<bool> ObjectSpaceFromValue(const VtValue &value)
+{
+  std::string text;
+  if (value.IsHolding<TfToken>()) {
+    text = value.UncheckedGet<TfToken>().GetString();
+  }
+  else if (value.IsHolding<std::string>()) {
+    text = value.UncheckedGet<std::string>();
+  }
+  if (text == "pixel") {
+    return false;
+  }
+  if (text == "object") {
+    return true;
+  }
+  return std::nullopt;
 }
 
 }  // namespace
@@ -460,6 +506,32 @@ HdRenderSettingDescriptorList HdCyclesDelegate::GetRenderSettingDescriptors() co
       HdCyclesRenderSettingsTokens->sampleOffset,
       VtValue(0),
   });
+  const HdCyclesSubdivisionSettings subdivision;
+  descriptors.push_back({
+      "Subdivision Surfaces",
+      HdCyclesRenderSettingsTokens->subdivisionSurfaces,
+      VtValue(subdivision.enabled),
+  });
+  descriptors.push_back({
+      "Dicing Rate",
+      HdCyclesRenderSettingsTokens->dicingRate,
+      VtValue(subdivision.dicingRate),
+  });
+  descriptors.push_back({
+      "Max Subdivision Level",
+      HdCyclesRenderSettingsTokens->maxSubdivisionLevel,
+      VtValue(subdivision.maxLevel),
+  });
+  descriptors.push_back({
+      "Adaptive Space",
+      HdCyclesRenderSettingsTokens->adaptiveSpace,
+      VtValue(TfToken("pixel")),
+  });
+  descriptors.push_back({
+      "Dicing Camera",
+      HdCyclesRenderSettingsTokens->dicingCamera,
+      VtValue(std::string()),
+  });
 
   for (const char *nodeName : kSettingsNodes) {
     const Node *const node = GetSettingsNode(scene, nodeName);
@@ -502,6 +574,58 @@ void HdCyclesDelegate::SetRenderSetting(const PXR_NS::TfToken &key, const PXR_NS
     session->params.sample_subset_length = Integrator::MAX_SAMPLES;
     session->params.use_sample_subset = session->params.sample_subset_offset > 0;
     ++_settingsVersion;
+  }
+  else if (key == HdCyclesRenderSettingsTokens->subdivisionSurfaces ||
+           key == HdCyclesRenderSettingsTokens->dicingRate ||
+           key == HdCyclesRenderSettingsTokens->maxSubdivisionLevel ||
+           key == HdCyclesRenderSettingsTokens->adaptiveSpace ||
+           key == HdCyclesRenderSettingsTokens->dicingCamera)
+  {
+    const HdCyclesSubdivisionSettings defaults;
+    HdCyclesSubdivisionSettings subdivision = _renderParam->subdivision;
+    if (key == HdCyclesRenderSettingsTokens->subdivisionSurfaces) {
+      subdivision.enabled = value.IsEmpty() ?
+                                defaults.enabled :
+                                VtValue::Cast<bool>(value).GetWithDefault(subdivision.enabled);
+    }
+    else if (key == HdCyclesRenderSettingsTokens->dicingRate) {
+      const float rate = value.IsEmpty() ?
+                             defaults.dicingRate :
+                             VtValue::Cast<float>(value).GetWithDefault(subdivision.dicingRate);
+      if (rate > 0.0f) {
+        subdivision.dicingRate = rate;
+      }
+      else {
+        TF_WARN("Ignoring %s of %g: it must be above zero", key.GetText(), rate);
+      }
+    }
+    else if (key == HdCyclesRenderSettingsTokens->maxSubdivisionLevel) {
+      subdivision.maxLevel = std::max(
+          0,
+          value.IsEmpty() ? defaults.maxLevel :
+                            VtValue::Cast<int>(value).GetWithDefault(subdivision.maxLevel));
+    }
+    else if (key == HdCyclesRenderSettingsTokens->adaptiveSpace) {
+      if (const std::optional<bool> objectSpace = value.IsEmpty() ? defaults.objectSpace :
+                                                                     ObjectSpaceFromValue(value))
+      {
+        subdivision.objectSpace = *objectSpace;
+      }
+      else {
+        TF_WARN("Ignoring %s: it must be \"pixel\" or \"object\"", key.GetText());
+      }
+    }
+    else if (const std::optional<SdfPath> path = PathFromValue(value)) {
+      subdivision.dicingCamera = *path;
+    }
+    else {
+      TF_WARN("Ignoring %s: it must be a camera prim path", key.GetText());
+    }
+    if (!(subdivision == _renderParam->subdivision)) {
+      _renderParam->subdivision = subdivision;
+      ++_renderParam->subdivisionVersion;
+      ++_settingsVersion;
+    }
   }
   else {
     Node *node = nullptr;
@@ -550,6 +674,21 @@ VtValue HdCyclesDelegate::GetRenderSetting(const TfToken &key) const
   }
   if (key == HdCyclesRenderSettingsTokens->sampleOffset) {
     return VtValue((session->params.use_sample_subset) ? session->params.sample_subset_offset : 0);
+  }
+  if (key == HdCyclesRenderSettingsTokens->subdivisionSurfaces) {
+    return VtValue(_renderParam->subdivision.enabled);
+  }
+  if (key == HdCyclesRenderSettingsTokens->dicingRate) {
+    return VtValue(_renderParam->subdivision.dicingRate);
+  }
+  if (key == HdCyclesRenderSettingsTokens->maxSubdivisionLevel) {
+    return VtValue(_renderParam->subdivision.maxLevel);
+  }
+  if (key == HdCyclesRenderSettingsTokens->adaptiveSpace) {
+    return VtValue(TfToken(_renderParam->subdivision.objectSpace ? "object" : "pixel"));
+  }
+  if (key == HdCyclesRenderSettingsTokens->dicingCamera) {
+    return VtValue(_renderParam->subdivision.dicingCamera.GetString());
   }
 
   Node *node = nullptr;

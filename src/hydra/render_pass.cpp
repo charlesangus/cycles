@@ -5,6 +5,7 @@
 
 #include "hydra/render_pass.h"
 #include "hydra/camera.h"
+#include "hydra/mesh.h"
 #include "hydra/output_driver.h"
 #include "hydra/render_buffer.h"
 #include "hydra/render_delegate.h"
@@ -132,6 +133,41 @@ void HdCyclesRenderPass::_Execute(const HdRenderPassStateSharedPtr &renderPassSt
                                           scene->camera);
     }
 
+    // Meshes are diced as seen from the dicing camera, which is the render camera unless the
+    // dicing camera setting names another
+    Camera *const dicingCamera = scene->dicing_camera;
+    dicingCamera->set_full_width(framing.dataWindow.GetWidth());
+    dicingCamera->set_full_height(framing.dataWindow.GetHeight());
+    const SdfPath &dicingCameraPath = _renderParam->subdivision.dicingCamera;
+    const auto *const namedDicingCamera =
+        dicingCameraPath.IsEmpty() ?
+            nullptr :
+            static_cast<const HdCyclesCamera *>(GetRenderIndex()->GetSprim(
+                HdPrimTypeTokens->camera, dicingCameraPath));
+    if (!dicingCameraPath.IsEmpty() && !namedDicingCamera &&
+        _warnedDicingCamera != dicingCameraPath)
+    {
+      _warnedDicingCamera = dicingCameraPath;
+      TF_WARN("The dicing camera %s is not a camera in the scene; meshes are diced from the "
+              "render camera",
+              dicingCameraPath.GetText());
+    }
+    if (namedDicingCamera) {
+      namedDicingCamera->ApplyCameraSettings(_renderParam, dicingCamera);
+    }
+    else if (const auto *const camera = static_cast<const HdCyclesCamera *>(
+                 renderPassState->GetCamera()))
+    {
+      camera->ApplyCameraSettings(_renderParam, dicingCamera);
+    }
+    else {
+      HdCyclesCamera::ApplyCameraSettings(_renderParam,
+                                          renderPassState->GetWorldToViewMatrix(),
+                                          renderPassState->GetProjectionMatrix(),
+                                          renderPassState->GetClipPlanes(),
+                                          dicingCamera);
+    }
+
     // Reset session if the session, scene, camera or AOV bindings changed
     if (scene->need_reset() || settingsVersion != _lastSettingsVersion) {
       _lastSettingsVersion = settingsVersion;
@@ -166,5 +202,22 @@ void HdCyclesRenderPass::_Execute(const HdRenderPassStateSharedPtr &renderPassSt
 }
 
 void HdCyclesRenderPass::_MarkCollectionDirty() {}
+
+// Hydra syncs render passes before rprims, so meshes marked dirty here sync this frame
+void HdCyclesRenderPass::_Sync()
+{
+  if (_renderParam->subdivisionVersion == _lastSubdivisionVersion) {
+    return;
+  }
+  _lastSubdivisionVersion = _renderParam->subdivisionVersion;
+
+  HdRenderIndex *const index = GetRenderIndex();
+  HdChangeTracker &tracker = index->GetChangeTracker();
+  for (const SdfPath &id : index->GetRprimIds()) {
+    if (dynamic_cast<const HdCyclesMesh *>(index->GetRprim(id))) {
+      tracker.MarkRprimDirty(id, HdChangeTracker::DirtyTopology);
+    }
+  }
+}
 
 HDCYCLES_NAMESPACE_CLOSE_SCOPE

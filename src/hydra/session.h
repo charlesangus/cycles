@@ -9,6 +9,7 @@
 #include "util/thread.h"
 
 #include <pxr/imaging/hd/renderDelegate.h>
+#include <pxr/usd/sdf/path.h>
 
 #include <atomic>
 #include <cstdint>
@@ -24,6 +25,20 @@ struct SceneLock {
 
  private:
   CCL_NS::thread_scoped_lock sceneLock;
+};
+
+/* Whether meshes are subdivided by their subdivision scheme, and how finely. A mesh's constant
+ * primvars "cycles:dicing_rate" (a multiplier on dicingRate) and "cycles:max_level" override
+ * these per mesh. */
+struct HdCyclesSubdivisionSettings {
+  bool enabled = false;
+  float dicingRate = 1.0f;
+  int maxLevel = 12;
+  bool objectSpace = false;
+  /* Empty for the render camera. */
+  PXR_NS::SdfPath dicingCamera;
+
+  bool operator==(const HdCyclesSubdivisionSettings &other) const = default;
 };
 
 class HdCyclesSession final : public PXR_NS::HdRenderParam {
@@ -97,6 +112,11 @@ class HdCyclesSession final : public PXR_NS::HdRenderParam {
    * and mark them converged, after the reset was asked for. */
   std::atomic<uint64_t> resetsWritten{0};
   std::atomic<uint64_t> resetsConverged{0};
+
+  /* Set outside Hydra's sync, read by the meshes during it. subdivisionVersion counts the
+   * changes that need every mesh's topology synced again. */
+  HdCyclesSubdivisionSettings subdivision;
+  unsigned int subdivisionVersion = 0;
 
  private:
   const bool _ownCyclesSession;
