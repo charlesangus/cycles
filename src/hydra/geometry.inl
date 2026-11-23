@@ -204,15 +204,15 @@ void HdCyclesGeometry<Base, CyclesBase>::Finalize(HdRenderParam *renderParam)
   const bool keep_nodes = static_cast<const HdCyclesSession *>(renderParam)->keep_nodes;
 
   if (!keep_nodes) {
-    lock.scene->delete_node(_geom);
-  }
-  _geom = nullptr;
-
-  if (!keep_nodes) {
     lock.scene->delete_nodes(set<Object *>(_instances.begin(), _instances.end()));
   }
   _instances.clear();
   _instances.shrink_to_fit();
+
+  if (!keep_nodes) {
+    lock.scene->delete_node(_geom);
+  }
+  _geom = nullptr;
 }
 
 template<typename Base, typename CyclesBase>
