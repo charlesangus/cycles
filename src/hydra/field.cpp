@@ -29,6 +29,9 @@ class HdCyclesVolumeLoader : public VDBImageLoader {
     /* Disable delay loading and file copying, this has poor performance on network drives. */
     const bool delay_load = false;
     try {
+      /* Blender initialises OpenVDB itself, so nothing in Cycles does. Without it no grid type
+       * is registered and readGrid throws. The call is idempotent and thread-safe. */
+      openvdb::initialize();
       openvdb::io::File file(filePath);
 #  ifdef OPENVDB_USE_DELAYED_LOADING
       file.setCopyMaxBytes(0);
