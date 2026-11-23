@@ -11,6 +11,7 @@
 #include "scene/geometry.h"
 #include "scene/object.h"
 #include "scene/scene.h"
+#include "scene/shader.h"
 #include "util/hash.h"
 
 #include <pxr/imaging/hd/materialBindingSchema.h>
@@ -18,6 +19,8 @@
 #include <pxr/imaging/hd/sceneDelegate.h>
 #include <pxr/imaging/hd/tokens.h>
 #include <pxr/imaging/hd/xformSchema.h>
+
+#include <type_traits>
 
 HDCYCLES_NAMESPACE_OPEN_SCOPE
 
@@ -89,12 +92,19 @@ void HdCyclesGeometry<Base, CyclesBase>::Sync(HdSceneDelegate *sceneDelegate,
         sceneDelegate->GetRenderIndex().GetSprim(HdPrimTypeTokens->material,
                                                  Base::GetMaterialId()));
 
+    Shader *const boundShader = material ? material->GetCyclesShader() : nullptr;
+
     array<Node *> usedShaders(1);
-    if (material && material->GetCyclesShader()) {
-      usedShaders[0] = material->GetCyclesShader();
+    if constexpr (std::is_same_v<CyclesBase, CCL_NS::Volume>) {
+      /* Volume::create_volume_mesh builds nothing without a volume shader, so a volume with no
+       * material, or one with only a surface, would never draw. Materials are synced before
+       * rprims, so has_volume_connected is current for the bound graph. */
+      usedShaders[0] = (boundShader && boundShader->has_volume_connected) ?
+                           boundShader :
+                           lock.scene->default_volume;
     }
     else {
-      usedShaders[0] = lock.scene->default_surface;
+      usedShaders[0] = boundShader ? boundShader : lock.scene->default_surface;
     }
 
     for (Node *shader : usedShaders) {
