@@ -78,6 +78,13 @@ void HdCyclesCurves::PopulatePoints(HdSceneDelegate *sceneDelegate)
   std::copy_n(reinterpret_cast<const packed_float3 *>(points.data()),
               std::min(points.size(), _geom->num_keys()),
               _geom->get_position_for_write());
+
+  PopulatePointMotion(_geom,
+                      _geom->attributes.find(ATTR_STD_POSITION),
+                      primvars,
+                      _geom->num_keys(),
+                      _shutterOpen,
+                      _shutterClose);
 }
 
 void HdCyclesCurves::PopulateWidths(HdSceneDelegate *sceneDelegate)

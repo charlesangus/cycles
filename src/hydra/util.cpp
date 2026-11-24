@@ -5,6 +5,9 @@
 
 #include "hydra/util.h"
 #include "scene/attribute.h"
+#include "scene/geometry.h"
+
+#include <algorithm>
 
 #include <pxr/base/gf/vec2f.h>
 #include <pxr/base/gf/vec3f.h>
@@ -13,6 +16,7 @@
 #include <pxr/imaging/hd/primvarSchema.h>
 #include <pxr/imaging/hd/renderIndex.h>
 #include <pxr/imaging/hd/sceneDelegate.h>
+#include <pxr/imaging/hd/sceneGlobalsSchema.h>
 #include <pxr/imaging/hd/tokens.h>
 
 HDCYCLES_NAMESPACE_OPEN_SCOPE
@@ -27,6 +31,87 @@ HdSceneIndexPrim GetPrim(HdSceneDelegate *delegate, const SdfPath &id)
     return {};
   }
   return si->GetPrim(id);
+}
+
+std::vector<float> MotionSampleTimes(const HdSampledDataSourceHandle &ds,
+                                     const float shutterOpen,
+                                     const float shutterClose)
+{
+  std::vector<float> times;
+  if (!ds || !(shutterOpen < shutterClose)) {
+    return times;
+  }
+  std::vector<float> contributing;
+  if (!ds->GetContributingSampleTimesForInterval(shutterOpen, shutterClose, &contributing) ||
+      contributing.empty())
+  {
+    return times;
+  }
+  size_t steps = std::max<size_t>(contributing.size(), 3) | 1;
+  steps = std::min<size_t>(steps, Geometry::MAX_MOTION_STEPS);
+  times.resize(steps);
+  for (size_t i = 0; i < steps; ++i) {
+    times[i] = shutterOpen + (shutterClose - shutterOpen) * float(i) / float(steps - 1);
+  }
+  return times;
+}
+
+void PopulatePointMotion(Geometry *geom,
+                         Attribute *attr_P,
+                         const HdPrimvarsSchema &primvars,
+                         const size_t numPoints,
+                         const float shutterOpen,
+                         const float shutterClose)
+{
+  const HdSampledDataSourceHandle ds =
+      primvars ? primvars.GetPrimvar(HdTokens->points).GetPrimvarValue() : nullptr;
+  std::vector<VtVec3fArray> samples;
+  for (const float time : MotionSampleTimes(ds, shutterOpen, shutterClose)) {
+    const VtValue value = ds->GetValue(time);
+    if (!value.IsHolding<VtVec3fArray>() || value.UncheckedGet<VtVec3fArray>().size() < numPoints)
+    {
+      samples.clear();
+      break;
+    }
+    samples.push_back(value.UncheckedGet<VtVec3fArray>());
+  }
+  const bool moves = std::any_of(samples.begin(), samples.end(), [&](const VtVec3fArray &step) {
+    return step != samples.front();
+  });
+
+  geom->set_use_motion_blur(moves);
+  geom->set_motion_steps(moves ? uint(samples.size()) : 0);
+  if (!moves) {
+    attr_P->remove_motion();
+    return;
+  }
+  attr_P->add_motion(geom);
+  const int numSteps = int(samples.size());
+  for (int step = 0; step < numSteps; ++step) {
+    std::copy_n(
+        reinterpret_cast<const packed_float3 *>(samples[step].data()),
+        numPoints,
+        attr_P->data_for_write<packed_float3>(attr_P->time_step_to_attr_step(step, numSteps)));
+  }
+}
+
+double GetTimeCodesPerSecond(HdSceneDelegate *delegate)
+{
+  const double fallback = 24.0;
+  if (!delegate) {
+    return fallback;
+  }
+  HdSceneIndexBaseRefPtr si = delegate->GetRenderIndex().GetTerminalSceneIndex();
+  if (!si) {
+    return fallback;
+  }
+  if (auto ds = HdSceneGlobalsSchema::GetFromSceneIndex(si).GetTimeCodesPerSecond()) {
+    const double timeCodesPerSecond = ds->GetTypedValue(0.0f);
+    if (timeCodesPerSecond > 0.0) {
+      return timeCodesPerSecond;
+    }
+  }
+  return fallback;
 }
 
 VtValue ReadPrimvar(const HdPrimvarsSchema &primvars, const TfToken &name)

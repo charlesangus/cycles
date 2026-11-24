@@ -641,6 +641,16 @@ void HdCyclesDelegate::SetRenderSetting(const PXR_NS::TfToken &key, const PXR_NS
           _renderParam->SetBackgroundTransparent(scene->background->get_transparent());
         }
       }
+      else if (node == scene->integrator && socket->name == "motion_blur") {
+        // The render pass sets the socket, as its default follows the camera's shutter
+        if (value.IsEmpty()) {
+          _renderParam->SetMotionBlur(std::nullopt);
+        }
+        else {
+          _renderParam->SetMotionBlur(
+              VtValue::Cast<bool>(value).GetWithDefault(scene->integrator->get_motion_blur()));
+        }
+      }
       else {
         SetNodeValue(node, *socket, value);
       }

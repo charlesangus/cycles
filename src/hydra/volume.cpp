@@ -120,6 +120,11 @@ void HdCyclesVolume::Populate(HdSceneDelegate *sceneDelegate, HdDirtyBits dirtyB
 
     rebuild = true;
   }
+
+  /* Velocity fields are in units per second, and Cycles advects a volume by velocity times its
+   * scale over the whole shutter. */
+  _geom->set_velocity_scale(
+      float((_shutterClose - _shutterOpen) / GetTimeCodesPerSecond(sceneDelegate)));
 }
 
 HDCYCLES_NAMESPACE_CLOSE_SCOPE

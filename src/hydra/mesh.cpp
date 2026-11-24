@@ -230,16 +230,18 @@ void HdCyclesMesh::PopulatePoints(HdSceneDelegate *sceneDelegate)
   }
 
   const auto &points = value.UncheckedGet<VtVec3fArray>();
+  const size_t numPoints = static_cast<size_t>(_topology.GetNumPoints());
 
-  TF_VERIFY(points.size() >= static_cast<size_t>(_topology.GetNumPoints()));
+  TF_VERIFY(points.size() >= numPoints);
 
   const bool subdivision = _geom->get_subdivision_type() != Mesh::SUBDIVISION_NONE;
   AttributeSet &attributes = (subdivision) ? _geom->subd_attributes : _geom->attributes;
   Attribute *attr_P = attributes.add(ATTR_STD_POSITION);
-  packed_float3 *verts = attr_P->data_for_write<packed_float3>();
 
-  std::copy_n(
-      reinterpret_cast<const packed_float3 *>(points.data()), _topology.GetNumPoints(), verts);
+  std::copy_n(reinterpret_cast<const packed_float3 *>(points.data()),
+              numPoints,
+              attr_P->data_for_write<packed_float3>());
+  PopulatePointMotion(_geom, attr_P, primvars, numPoints, _shutterOpen, _shutterClose);
   _geom->tag_position_modified();
 }
 
