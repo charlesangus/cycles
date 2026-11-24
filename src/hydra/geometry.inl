@@ -71,6 +71,10 @@ void HdCyclesGeometry<Base, CyclesBase>::Sync(HdSceneDelegate *sceneDelegate,
 
   const SceneLock lock(renderParam);
 
+  const auto *const session = static_cast<const HdCyclesSession *>(renderParam);
+  _shutterOpen = session->GetMotionShutterOpen();
+  _shutterClose = session->GetMotionShutterClose();
+
   const SdfPath &id = Base::GetId();
   const HdSceneIndexPrim prim = GetPrim(sceneDelegate, id);
   const HdContainerDataSourceHandle &primDs = prim.dataSource;
@@ -111,8 +115,12 @@ void HdCyclesGeometry<Base, CyclesBase>::Sync(HdSceneDelegate *sceneDelegate,
 
   if (HdChangeTracker::IsTransformDirty(*dirtyBits, id)) {
     _geomTransform = GfMatrix4d(1.0);
+    _geomMotion.clear();
     if (auto matrixDs = HdXformSchema::GetFromParent(primDs).GetMatrix()) {
       _geomTransform = matrixDs->GetTypedValue(0.0f);
+      for (const float time : MotionSampleTimes(matrixDs, _shutterOpen, _shutterClose)) {
+        _geomMotion.push_back(matrixDs->GetTypedValue(time));
+      }
     }
   }
 
@@ -151,13 +159,16 @@ void HdCyclesGeometry<Base, CyclesBase>::Sync(HdSceneDelegate *sceneDelegate,
     }
 
     // Update transforms of all instances
+    const float metersPerUnit = session->GetStageMetersPerUnit();
+    const Transform scale = transform_scale(make_float3(metersPerUnit));
     for (size_t i = 0; i < transforms.size(); ++i) {
-      const float metersPerUnit =
-          static_cast<HdCyclesSession *>(renderParam)->GetStageMetersPerUnit();
+      _instances[i]->set_tfm(scale * convert_transform(_geomTransform * transforms[i]));
 
-      const Transform tfm = transform_scale(make_float3(metersPerUnit)) *
-                            convert_transform(_geomTransform * transforms[i]);
-      _instances[i]->set_tfm(tfm);
+      array<Transform> motion(_geomMotion.size());
+      for (size_t step = 0; step < _geomMotion.size(); ++step) {
+        motion[step] = scale * convert_transform(_geomMotion[step] * transforms[i]);
+      }
+      _instances[i]->set_motion(motion);
     }
   }
 

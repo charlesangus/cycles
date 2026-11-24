@@ -66,33 +66,28 @@ void HdCyclesCamera::Sync(HdSceneDelegate *sceneDelegate,
   HdCameraSchema cameraSchema = HdCameraSchema::GetFromParent(primDs);
   HdContainerDataSourceHandle cameraDs = cameraSchema.GetContainer();
 
-  /* Read the shutter window from the camera prim so animated transforms can
-   * be sampled across it for motion blur. */
-  float shutterOpen = 0.0f;
-  float shutterClose = 0.0f;
-  if (auto ds = cameraSchema.GetShutterOpen()) {
-    shutterOpen = float(ds->GetTypedValue(0.0f));
-  }
-  if (auto ds = cameraSchema.GetShutterClose()) {
-    shutterClose = float(ds->GetTypedValue(0.0f));
+  if (*dirtyBits & DirtyBits::DirtyParams) {
+    _shutterOpen = 0.0;
+    _shutterClose = 0.0;
+    if (auto ds = cameraSchema.GetShutterOpen()) {
+      _shutterOpen = ds->GetTypedValue(0.0f);
+    }
+    if (auto ds = cameraSchema.GetShutterClose()) {
+      _shutterClose = ds->GetTypedValue(0.0f);
+    }
   }
 
-  if (*dirtyBits & DirtyBits::DirtyTransform) {
+  // The transform's motion is sampled over the shutter, so a shutter change resamples it
+  if (*dirtyBits & (DirtyBits::DirtyTransform | DirtyBits::DirtyParams)) {
+    _transformMotion.clear();
     HdXformSchema xformSchema = HdXformSchema::GetFromParent(primDs);
     if (auto matrixDs = xformSchema.GetMatrix()) {
-      SampleTyped<GfMatrix4d, 2>(matrixDs, shutterOpen, shutterClose, &_transformSamples);
-      bool transform_found = false;
-      for (size_t i = 0; i < _transformSamples.count; ++i) {
-        if (_transformSamples.times[i] == 0.0f) {
-          _transform = _transformSamples.values[i];
-          _data.SetTransform(_transform);
-          transform_found = true;
-          break;
-        }
-      }
-      if (!transform_found && _transformSamples.count) {
-        _transform = _transformSamples.values[0];
-        _data.SetTransform(_transform);
+      _transform = matrixDs->GetTypedValue(0.0f);
+      _data.SetTransform(_transform);
+      for (const float time :
+           MotionSampleTimes(matrixDs, float(_shutterOpen), float(_shutterClose)))
+      {
+        _transformMotion.push_back(matrixDs->GetTypedValue(time));
       }
     }
   }
@@ -178,13 +173,23 @@ void HdCyclesCamera::Finalize(HdRenderParam *renderParam)
 
 void HdCyclesCamera::ApplyCameraSettings(HdRenderParam *renderParam, Camera *cam) const
 {
-  ApplyCameraSettings(renderParam, _data, _windowPolicy, cam);
+  const CameraUtilFraming framing(
+      GfRect2i(GfVec2i(0), int(cam->get_full_width()), int(cam->get_full_height())));
+  ApplyCameraSettings(renderParam, framing, _windowPolicy, cam);
+}
+
+void HdCyclesCamera::ApplyCameraSettings(HdRenderParam *renderParam,
+                                         const CameraUtilFraming &framing,
+                                         const CameraUtilConformWindowPolicy windowPolicy,
+                                         Camera *cam) const
+{
+  ApplyCameraSettings(renderParam, _data, windowPolicy, framing, cam);
 
   const float metersPerUnit = static_cast<HdCyclesSession *>(renderParam)->GetStageMetersPerUnit();
 
-  array<Transform> motion(_transformSamples.count);
-  for (size_t i = 0; i < _transformSamples.count; ++i) {
-    motion[i] = convert_camera_transform(_transformSamples.values[i], metersPerUnit);
+  array<Transform> motion(_transformMotion.size());
+  for (size_t i = 0; i < _transformMotion.size(); ++i) {
+    motion[i] = convert_camera_transform(_transformMotion[i], metersPerUnit);
   }
   cam->set_motion(motion);
 }
@@ -192,13 +197,22 @@ void HdCyclesCamera::ApplyCameraSettings(HdRenderParam *renderParam, Camera *cam
 void HdCyclesCamera::ApplyCameraSettings(HdRenderParam *renderParam,
                                          const GfCamera &dataUnconformedWindow,
                                          CameraUtilConformWindowPolicy windowPolicy,
+                                         const CameraUtilFraming &framing,
                                          Camera *cam)
 {
-  const float width = cam->get_full_width();
-  const float height = cam->get_full_height();
+  const GfRange2f &displayWindow = framing.displayWindow;
+  const GfRect2i &dataWindow = framing.dataWindow;
+  const float displayWidth = displayWindow.GetSize()[0];
+  const float displayHeight = displayWindow.GetSize()[1];
+  const float pixelAspect = framing.pixelAspectRatio > 0.0f ? framing.pixelAspectRatio : 1.0f;
+
+  cam->set_full_width(dataWindow.GetWidth());
+  cam->set_full_height(dataWindow.GetHeight());
 
   auto data = dataUnconformedWindow;
-  CameraUtilConformWindow(&data, windowPolicy, width / height);
+  if (displayWidth > 0.0f && displayHeight > 0.0f) {
+    CameraUtilConformWindow(&data, windowPolicy, displayWidth * pixelAspect / displayHeight);
+  }
 
   if (data.GetProjection() == GfCamera::Orthographic) {
     cam->set_camera_type(CAMERA_ORTHOGRAPHIC);
@@ -218,16 +232,33 @@ void HdCyclesCamera::ApplyCameraSettings(HdRenderParam *renderParam,
     cam->set_fov(GfDegreesToRadians(data.GetFieldOfView(GfCamera::FOVVertical)));
   }
 
+  /* The window spans the display window; Cycles renders the data window, which may be a part of
+   * it or reach past it. Pixel rows count down from the top, the view plane up. */
+  double left = viewplane.GetMin()[0];
+  double right = viewplane.GetMax()[0];
+  double bottom = viewplane.GetMin()[1];
+  double top = viewplane.GetMax()[1];
+  if (displayWidth > 0.0f && displayHeight > 0.0f) {
+    const double unitsPerPixelX = (right - left) / displayWidth;
+    const double unitsPerPixelY = (top - bottom) / displayHeight;
+    const double viewTop = top;
+    left = viewplane.GetMin()[0] +
+           (dataWindow.GetMinX() - displayWindow.GetMin()[0]) * unitsPerPixelX;
+    right = left + dataWindow.GetWidth() * unitsPerPixelX;
+    top = viewTop - (dataWindow.GetMinY() - displayWindow.GetMin()[1]) * unitsPerPixelY;
+    bottom = top - dataWindow.GetHeight() * unitsPerPixelY;
+  }
+
   cam->set_sensorwidth(data.GetHorizontalAperture() * GfCamera::APERTURE_UNIT * metersPerUnit);
   cam->set_sensorheight(data.GetVerticalAperture() * GfCamera::APERTURE_UNIT * metersPerUnit);
 
   cam->set_nearclip(data.GetClippingRange().GetMin() * metersPerUnit);
   cam->set_farclip(data.GetClippingRange().GetMax() * metersPerUnit);
 
-  cam->set_viewplane_left(viewplane.GetMin()[0]);
-  cam->set_viewplane_right(viewplane.GetMax()[0]);
-  cam->set_viewplane_bottom(viewplane.GetMin()[1]);
-  cam->set_viewplane_top(viewplane.GetMax()[1]);
+  cam->set_viewplane_left(left);
+  cam->set_viewplane_right(right);
+  cam->set_viewplane_bottom(bottom);
+  cam->set_viewplane_top(top);
 
   if (data.GetFStop() != 0.0f) {
     cam->set_focaldistance(data.GetFocusDistance() * metersPerUnit);
@@ -241,12 +272,16 @@ void HdCyclesCamera::ApplyCameraSettings(HdRenderParam *renderParam,
                                          const GfMatrix4d &worldToViewMatrix,
                                          const GfMatrix4d &projectionMatrix,
                                          const std::vector<GfVec4d> & /*clipPlanes*/,
+                                         CameraUtilConformWindowPolicy windowPolicy,
+                                         const CameraUtilFraming &framing,
                                          Camera *cam)
 {
   GfCamera data;
   data.SetFromViewAndProjectionMatrix(worldToViewMatrix, projectionMatrix);
 
-  ApplyCameraSettings(renderParam, data, CameraUtilFit, cam);
+  ApplyCameraSettings(renderParam, data, windowPolicy, framing, cam);
+  array<Transform> noMotion;
+  cam->set_motion(noMotion);
 }
 
 HDCYCLES_NAMESPACE_CLOSE_SCOPE

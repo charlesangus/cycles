@@ -48,6 +48,42 @@ class HdCyclesSession final : public PXR_NS::HdRenderParam {
     _stageMetersPerUnit = stageMetersPerUnit;
   }
 
+  /* An explicit integrator motion blur setting, which wins over turning it on whenever the
+   * camera's shutter is open; nullopt goes back to that default. */
+  std::optional<bool> GetMotionBlur() const
+  {
+    return _motionBlur;
+  }
+
+  void SetMotionBlur(std::optional<bool> motionBlur)
+  {
+    _motionBlur = motionBlur;
+  }
+
+  /* The shutter interval, in time codes from the current frame, that geometry is sampled over
+   * for motion blur: closed (open == close) when motion blur is off. Set by the render pass
+   * between syncs, so rprims syncing in parallel read it unlocked. */
+  float GetMotionShutterOpen() const
+  {
+    return _motionShutterOpen;
+  }
+
+  float GetMotionShutterClose() const
+  {
+    return _motionShutterClose;
+  }
+
+  /* Whether the interval changed. */
+  bool SetMotionShutter(const float open, const float close)
+  {
+    if (open == _motionShutterOpen && close == _motionShutterClose) {
+      return false;
+    }
+    _motionShutterOpen = open;
+    _motionShutterClose = close;
+    return true;
+  }
+
   PXR_NS::HdRenderPassAovBinding GetDisplayAovBinding() const
   {
     const CCL_NS::thread_scoped_lock lock(_aovMutex);
@@ -106,6 +142,9 @@ class HdCyclesSession final : public PXR_NS::HdRenderParam {
   PXR_NS::HdRenderPassAovBinding _displayAovBinding;
   std::optional<bool> _backgroundTransparent;
   bool _defaultBackgroundTransparent = false;
+  std::optional<bool> _motionBlur;
+  float _motionShutterOpen = 0.0f;
+  float _motionShutterClose = 0.0f;
 };
 
 HDCYCLES_NAMESPACE_CLOSE_SCOPE

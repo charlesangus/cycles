@@ -8,13 +8,15 @@
 #include "hydra/config.h"
 #include "scene/attribute.h"
 
+#include <pxr/base/vt/types.h>
 #include <pxr/base/vt/value.h>
 #include <pxr/imaging/hd/dataSource.h>
 #include <pxr/imaging/hd/enums.h>
 #include <pxr/imaging/hd/primvarsSchema.h>
 #include <pxr/imaging/hd/sceneIndex.h>
-#include <pxr/imaging/hd/timeSampleArray.h>
 #include <pxr/imaging/hd/types.h>
+
+#include <vector>
 
 PXR_NAMESPACE_OPEN_SCOPE
 class HdSceneDelegate;
@@ -60,32 +62,26 @@ T GetTypedValue(const PXR_NS::HdContainerDataSourceHandle &container,
   return fallback;
 }
 
-/* Sample a typed data source over the shutter into `out`. */
-template<typename T, unsigned int Capacity>
-void SampleTyped(const typename PXR_NS::HdTypedSampledDataSource<T>::Handle &ds,
-                 float shutterOpen,
-                 float shutterClose,
-                 PXR_NS::HdTimeSampleArray<T, Capacity> *out)
-{
-  if (!ds) {
-    out->Resize(0);
-    return;
-  }
-  std::vector<float> times;
-  const bool hasSamples = ds->GetContributingSampleTimesForInterval(
-      shutterOpen, shutterClose, &times);
-  if (!hasSamples || times.empty()) {
-    out->Resize(1);
-    out->times[0] = 0.0f;
-    out->values[0] = ds->GetTypedValue(0.0f);
-    return;
-  }
-  out->Resize(times.size());
-  for (size_t i = 0; i < times.size(); ++i) {
-    out->times[i] = times[i];
-    out->values[i] = ds->GetTypedValue(times[i]);
-  }
-}
+/* Shutter offsets to sample `ds` at for motion blur, evenly spaced from `shutterOpen` to
+ * `shutterClose`, as Cycles spreads its motion steps evenly over the shutter. Their count is odd
+ * so that one falls on the shutter's middle, where Cycles keeps a geometry's centre step. Empty
+ * when the shutter is closed or `ds` does not vary over it. */
+std::vector<float> MotionSampleTimes(const PXR_NS::HdSampledDataSourceHandle &ds,
+                                     float shutterOpen,
+                                     float shutterClose);
+
+/* The points primvar sampled over the shutter into the motion steps of `attr_P`, the centre step
+ * included, with the geometry's motion steps to match. When they do not move over it, or their
+ * count changes, `attr_P` loses its motion steps and keeps its centre step. */
+void PopulatePointMotion(CCL_NS::Geometry *geom,
+                         CCL_NS::Attribute *attr_P,
+                         const PXR_NS::HdPrimvarsSchema &primvars,
+                         size_t numPoints,
+                         float shutterOpen,
+                         float shutterClose);
+
+/* The stage's time codes per second, by which time-code shutter offsets become seconds. */
+double GetTimeCodesPerSecond(PXR_NS::HdSceneDelegate *delegate);
 
 /* Read a primvar's value at shutter offset 0. */
 PXR_NS::VtValue ReadPrimvar(const PXR_NS::HdPrimvarsSchema &primvars, const PXR_NS::TfToken &name);

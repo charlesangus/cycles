@@ -7,7 +7,10 @@
 
 #include "hydra/config.h"
 
+#include <pxr/base/gf/matrix4d.h>
 #include <pxr/imaging/hd/rprim.h>
+
+#include <vector>
 
 HDCYCLES_NAMESPACE_OPEN_SCOPE
 
@@ -36,12 +39,18 @@ template<typename Base, typename CyclesBase> class HdCyclesGeometry : public Bas
   CyclesBase *_geom = nullptr;
   std::vector<CCL_NS::Object *> _instances;
 
+  /* The shutter interval this sync samples motion over, from the render param. */
+  float _shutterOpen = 0.0f;
+  float _shutterClose = 0.0f;
+
  private:
   void Initialize(PXR_NS::HdRenderParam *renderParam);
 
   void InitializeInstance(const int index);
 
   PXR_NS::GfMatrix4d _geomTransform;
+  /* The transform at evenly spaced times over the shutter, empty when it does not move. */
+  std::vector<PXR_NS::GfMatrix4d> _geomMotion;
 };
 
 HDCYCLES_NAMESPACE_CLOSE_SCOPE

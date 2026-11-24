@@ -20,6 +20,8 @@
 
 #include "session/session.h"
 
+#include <pxr/imaging/hd/changeTracker.h>
+#include <pxr/imaging/hd/renderIndex.h>
 #include <pxr/imaging/hd/renderPassState.h>
 
 HDCYCLES_NAMESPACE_OPEN_SCOPE
@@ -116,20 +118,56 @@ void HdCyclesRenderPass::_Execute(const HdRenderPassStateSharedPtr &renderPassSt
       framing = CameraUtilFraming(GfRect2i(GfVec2i(0), int(vp[2]), int(vp[3])));
     }
 
-    scene->camera->set_full_width(framing.dataWindow.GetWidth());
-    scene->camera->set_full_height(framing.dataWindow.GetHeight());
+    const auto *const camera = static_cast<const HdCyclesCamera *>(renderPassState->GetCamera());
 
-    if (const auto *const camera = static_cast<const HdCyclesCamera *>(
-            renderPassState->GetCamera()))
-    {
-      camera->ApplyCameraSettings(_renderParam, scene->camera);
+    float shutterOpen = camera ? float(camera->GetShutterOpen()) : 0.0f;
+    float shutterClose = camera ? float(camera->GetShutterClose()) : 0.0f;
+    const bool shutterIsOpen = shutterOpen < shutterClose;
+    const bool motionBlur = _renderParam->GetMotionBlur().value_or(shutterIsOpen);
+    if (!motionBlur || !shutterIsOpen) {
+      shutterOpen = 0.0f;
+      shutterClose = 0.0f;
+    }
+
+    if (scene->integrator->get_motion_blur() != motionBlur) {
+      scene->integrator->set_motion_blur(motionBlur);
+      scene->integrator->tag_update(scene, Integrator::UPDATE_NONE);
+    }
+
+    /* Rprims sample their motion over this interval as they sync, which is before the render
+     * pass learns its camera. When it changes they sync again and this pass renders nothing, as
+     * it would converge on the old motion. A volume reads its velocity only with motion blur on,
+     * hence its fields too. */
+    if (_renderParam->SetMotionShutter(shutterOpen, shutterClose)) {
+      GetRenderIndex()->GetChangeTracker().MarkAllRprimsDirty(HdChangeTracker::DirtyTransform |
+                                                              HdChangeTracker::DirtyPoints |
+                                                              HdChangeTracker::DirtyVolumeField);
+      ResetConverged();
+      scene->mutex.unlock();
+      return;
+    }
+
+    if (camera) {
+      camera->ApplyCameraSettings(
+          _renderParam, framing, renderPassState->GetWindowPolicy(), scene->camera);
     }
     else {
       HdCyclesCamera::ApplyCameraSettings(_renderParam,
                                           renderPassState->GetWorldToViewMatrix(),
                                           renderPassState->GetProjectionMatrix(),
                                           renderPassState->GetClipPlanes(),
+                                          renderPassState->GetWindowPolicy(),
+                                          framing,
                                           scene->camera);
+    }
+
+    if (shutterIsOpen && motionBlur) {
+      scene->camera->set_shuttertime(shutterClose - shutterOpen);
+      /* Cycles places the current frame, at which volumes advect by their velocity, at the
+       * shutter's start, middle or end only: a shutter around the frame counts as centred. */
+      scene->camera->set_motion_position(shutterClose <= 0.0f ? MOTION_POSITION_END :
+                                         shutterOpen >= 0.0f  ? MOTION_POSITION_START :
+                                                                MOTION_POSITION_CENTER);
     }
 
     // Reset session if the session, scene, camera or AOV bindings changed
@@ -139,14 +177,15 @@ void HdCyclesRenderPass::_Execute(const HdRenderPassStateSharedPtr &renderPassSt
       // Reset convergence state of all render buffers
       ResetConverged();
 
+      // The camera's full size is the data window, so the buffers are all of it
       BufferParams buffer_params;
-      buffer_params.full_x = static_cast<int>(framing.displayWindow.GetMin()[0]);
-      buffer_params.full_y = static_cast<int>(framing.displayWindow.GetMin()[1]);
-      buffer_params.full_width = static_cast<int>(framing.displayWindow.GetSize()[0]);
-      buffer_params.full_height = static_cast<int>(framing.displayWindow.GetSize()[1]);
+      buffer_params.full_x = 0;
+      buffer_params.full_y = 0;
+      buffer_params.full_width = framing.dataWindow.GetWidth();
+      buffer_params.full_height = framing.dataWindow.GetHeight();
 
-      buffer_params.window_x = framing.dataWindow.GetMinX() - buffer_params.full_x;
-      buffer_params.window_y = framing.dataWindow.GetMinY() - buffer_params.full_y;
+      buffer_params.window_x = 0;
+      buffer_params.window_y = 0;
       buffer_params.window_width = framing.dataWindow.GetWidth();
       buffer_params.window_height = framing.dataWindow.GetHeight();
 

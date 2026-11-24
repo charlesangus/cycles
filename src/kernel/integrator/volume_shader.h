@@ -372,11 +372,12 @@ ccl_device_inline void volume_shader_motion_blur(KernelGlobals kg,
 
   const float3 P = sd->P;
   const float velocity_scale = kernel_data_fetch(objects, sd->object).velocity_scale;
-  const float time_offset = kernel_data.cam.motion_position == MOTION_POSITION_CENTER ? 0.5f :
-                                                                                        0.0f;
-  const float time = kernel_data.cam.motion_position == MOTION_POSITION_END ?
-                         (1.0f - kernel_data.cam.shuttertime) + sd->time :
-                         sd->time;
+  /* The ray time, from 0 at the shutter's opening to 1 at its closing, at which the volume is as
+   * stored, at the current frame. */
+  const float time_offset = kernel_data.cam.motion_position == MOTION_POSITION_START  ? 0.0f :
+                            kernel_data.cam.motion_position == MOTION_POSITION_CENTER ? 0.5f :
+                                                                                        1.0f;
+  const float time = sd->time;
 
   /* Use a 1st order semi-lagrangian advection scheme to estimate what volume quantity
    * existed, or will exist, at the given time:
