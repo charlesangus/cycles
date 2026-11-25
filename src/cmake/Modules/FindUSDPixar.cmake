@@ -111,8 +111,6 @@ if(pxr_FOUND)
 
   message(STATUS "OSL is not part of the USD package, disabling WITH_CYCLES_OSL")
   set(WITH_CYCLES_OSL OFF)
-  message(STATUS "NanoVDB is not part of the USD package, disabling WITH_CYCLES_NANOVDB")
-  set(WITH_CYCLES_NANOVDB OFF)
 
   unset(_pxr_library_dir)
 else()
