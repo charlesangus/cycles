@@ -5,6 +5,7 @@
 
 #include "hydra/field.h"
 #include "hydra/util.h"
+#include "hydra/volume.h"
 
 #include "util/log.h"
 
@@ -14,6 +15,8 @@
 #  include "scene/scene.h"
 #endif
 
+#include <pxr/imaging/hd/changeTracker.h>
+#include <pxr/imaging/hd/renderIndex.h>
 #include <pxr/imaging/hd/sceneDelegate.h>
 #include <pxr/imaging/hd/volumeFieldSchema.h>
 #include <pxr/usd/sdf/assetPath.h>
@@ -82,24 +85,29 @@ void HdCyclesField::Sync(HdSceneDelegate *sceneDelegate,
       filename = assetPath.GetAssetPath();
     }
 
-    if (!filename.empty()) {
-      TfToken fieldName;
-      if (auto ds = schema.GetFieldName()) {
-        fieldName = ds->GetTypedValue(0.0f);
-      }
+    TfToken fieldName;
+    if (auto ds = schema.GetFieldName()) {
+      fieldName = ds->GetTypedValue(0.0f);
+    }
 
-      if (!fieldName.IsEmpty()) {
+    {
+      const SceneLock lock(renderParam);
+
+      if (!filename.empty() && !fieldName.IsEmpty()) {
         unique_ptr<ImageLoader> loader = make_unique<HdCyclesVolumeLoader>(filename,
                                                                            fieldName.GetString());
-
-        const SceneLock lock(renderParam);
 
         ImageParams params;
         params.frame = 0.0f;
 
         _handle = lock.scene->image_manager->add_image(std::move(loader), params, false);
       }
+      else {
+        _handle.clear();
+      }
     }
+
+    MarkVolumesDirty(sceneDelegate);
   }
 #else
   (void)sceneDelegate;
@@ -107,6 +115,35 @@ void HdCyclesField::Sync(HdSceneDelegate *sceneDelegate,
 #endif
 
   *dirtyBits = DirtyBits::Clean;
+}
+
+void HdCyclesField::AddVolume(const SdfPath &volumeId)
+{
+  const std::lock_guard<std::mutex> guard(_volumesMutex);
+  _volumes.insert(volumeId);
+}
+
+/* A volume copies the field's image handle when it syncs, and nothing else dirties the volume
+ * when only the field changes (a time-sampled filePath, say), so it would keep drawing the old
+ * grid. Bprims sync before rprims, so the volumes marked here pick up the new handle in this
+ * same sync. */
+void HdCyclesField::MarkVolumesDirty(HdSceneDelegate *sceneDelegate)
+{
+  HdRenderIndex &renderIndex = sceneDelegate->GetRenderIndex();
+  HdChangeTracker &tracker = renderIndex.GetChangeTracker();
+  const SdfPath &id = GetId();
+
+  const std::lock_guard<std::mutex> guard(_volumesMutex);
+  for (auto it = _volumes.begin(); it != _volumes.end();) {
+    const auto *const volume = dynamic_cast<const HdCyclesVolume *>(renderIndex.GetRprim(*it));
+    if (volume && volume->UsesField(id)) {
+      tracker.MarkRprimDirty(*it, HdChangeTracker::DirtyVolumeField);
+      ++it;
+    }
+    else {
+      it = _volumes.erase(it);
+    }
+  }
 }
 
 HDCYCLES_NAMESPACE_CLOSE_SCOPE
