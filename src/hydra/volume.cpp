@@ -112,6 +112,12 @@ void HdCyclesVolume::Populate(HdSceneDelegate *sceneDelegate, HdDirtyBits dirtyB
 
     _geom->merge_grids(scene);
 
+    /* Only voxel attributes changed, and they are not sockets, so without this the geometry
+     * manager would see an unmodified volume: it would keep the bounding mesh built from the
+     * previous grid and the volume manager would keep that grid's octree, so a grid that moved
+     * would be drawn only where the old one was. */
+    _geom->tag_modified();
+
     rebuild = true;
   }
 }
