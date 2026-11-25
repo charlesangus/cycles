@@ -48,6 +48,21 @@ void HdCyclesVolume::Populate(HdSceneDelegate *sceneDelegate, HdDirtyBits dirtyB
 
     _fieldIds.clear();
 
+    /* The kernel finds a voxel attribute's image slot through the attribute map, which is only
+     * rebuilt when an attribute is added or removed. Giving an existing attribute a new handle
+     * would leave the map on the old image's slot, and the old image is freed once nothing holds
+     * it, so the kernel would read freed grid memory. Bindings that went away are dropped too. */
+    for (auto it = _geom->attributes.attributes.begin();
+         it != _geom->attributes.attributes.end();)
+    {
+      if (it->element & ATTR_ELEMENT_VOXEL) {
+        _geom->attributes.remove(it++);
+      }
+      else {
+        ++it;
+      }
+    }
+
     for (const TfToken &fieldName : bindings.GetVolumeFieldBindingNames()) {
       auto pathDs = bindings.GetVolumeFieldBinding(fieldName);
       if (!pathDs) {
