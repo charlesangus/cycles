@@ -109,13 +109,20 @@ VtMatrix4dArray HdCyclesInstancer::ComputeInstanceTransforms(const SdfPath &prot
   VtMatrix4dArray transforms;
   transforms.reserve(instanceIndices.size());
 
+  /* Row-vector convention: the per-instance matrix applies first, then scale, rotate and
+   * translate, then the instancer's own transform, as in
+   * UsdGeomPointInstancer::ComputeInstanceTransformsAtTime. */
   for (const int index : instanceIndices) {
-    GfMatrix4d transform = instanceTransform;
+    GfMatrix4d transform(1.0);
 
-    if (index < _translate.size()) {
-      GfMatrix4d translateMat(1);
-      translateMat.SetTranslate(_translate[index]);
-      transform *= translateMat;
+    if (index < _instanceTransform.size()) {
+      transform = _instanceTransform[index];
+    }
+
+    if (index < _scale.size()) {
+      GfMatrix4d scaleMat(1);
+      scaleMat.SetScale(_scale[index]);
+      transform *= scaleMat;
     }
 
     if (index < _rotate.size()) {
@@ -125,15 +132,13 @@ VtMatrix4dArray HdCyclesInstancer::ComputeInstanceTransforms(const SdfPath &prot
       transform *= rotateMat;
     }
 
-    if (index < _scale.size()) {
-      GfMatrix4d scaleMat(1);
-      scaleMat.SetScale(_scale[index]);
-      transform *= scaleMat;
+    if (index < _translate.size()) {
+      GfMatrix4d translateMat(1);
+      translateMat.SetTranslate(_translate[index]);
+      transform *= translateMat;
     }
 
-    if (index < _instanceTransform.size()) {
-      transform *= _instanceTransform[index];
-    }
+    transform *= instanceTransform;
 
     transforms.push_back(transform);
   }
@@ -157,9 +162,10 @@ VtMatrix4dArray HdCyclesInstancer::ComputeInstanceTransforms(const SdfPath &prot
     auto *const parentInstancer = static_cast<HdCyclesInstancer *>(
         sceneDelegate->GetRenderIndex().GetInstancer(parentId));
     if (parentInstancer) {
+      /* This level's transform applies first, then each parent instance's. */
       for (const GfMatrix4d &parentTransform : parentInstancer->ComputeInstanceTransforms(id)) {
         for (const GfMatrix4d &localTransform : transforms) {
-          resultTransforms.push_back(parentTransform * localTransform);
+          resultTransforms.push_back(localTransform * parentTransform);
         }
       }
       return resultTransforms;
