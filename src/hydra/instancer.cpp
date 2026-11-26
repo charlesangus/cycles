@@ -109,9 +109,7 @@ VtMatrix4dArray HdCyclesInstancer::ComputeInstanceTransforms(const SdfPath &prot
   VtMatrix4dArray transforms;
   transforms.reserve(instanceIndices.size());
 
-  /* Row-vector convention: the per-instance matrix applies first, then scale, rotate and
-   * translate, then the instancer's own transform, as in
-   * UsdGeomPointInstancer::ComputeInstanceTransformsAtTime. */
+  /* HdInstancer's order in row vectors: instanceTransforms * scale * rotate * translate * xform */
   for (const int index : instanceIndices) {
     GfMatrix4d transform(1.0);
 
