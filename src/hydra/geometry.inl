@@ -94,7 +94,10 @@ void HdCyclesGeometry<Base, CyclesBase>::Sync(HdSceneDelegate *sceneDelegate,
       usedShaders[0] = material->GetCyclesShader();
     }
     else {
-      usedShaders[0] = lock.scene->default_surface;
+      /* As in Blender's sync: a volume without a material uses the default volume shader, the
+       * surface one has no volume closure, so the volume would be neither meshed nor drawn. */
+      usedShaders[0] = _geom->is_volume() ? lock.scene->default_volume :
+                                            lock.scene->default_surface;
     }
 
     for (Node *shader : usedShaders) {
