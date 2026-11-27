@@ -1034,6 +1034,9 @@ template<> void Scene::delete_node(Light *node)
 template<> void Scene::delete_node(Mesh *node)
 {
   assert(node->get_owner() == this);
+  if (node->has_volume) {
+    volume_manager->tag_update(set<Geometry *>{node});
+  }
   geometry.erase_by_swap(node);
   geometry_manager->tag_update(this, GeometryManager::MESH_REMOVED);
 }
@@ -1048,6 +1051,9 @@ template<> void Scene::delete_node(Hair *node)
 template<> void Scene::delete_node(Volume *node)
 {
   assert(node->get_owner() == this);
+  if (node->has_volume) {
+    volume_manager->tag_update(set<Geometry *>{node});
+  }
   geometry.erase_by_swap(node);
   geometry_manager->tag_update(this, GeometryManager::MESH_REMOVED);
 }

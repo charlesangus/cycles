@@ -351,8 +351,9 @@ void HdCyclesLight::Finalize(HdRenderParam *renderParam)
   const bool keep_nodes = static_cast<const HdCyclesSession *>(renderParam)->keep_nodes;
 
   if (!keep_nodes) {
-    lock.scene->delete_node(_light);
+    /* The object goes first: removing it reads its light's volume state. */
     lock.scene->delete_node(_object);
+    lock.scene->delete_node(_light);
   }
 
   _light = nullptr;
