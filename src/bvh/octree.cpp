@@ -251,6 +251,62 @@ void Octree::evaluate_volume_density(Device *device,
       });
 }
 
+/* The density is evaluated at one time only, but a volume advected by its velocity has density
+ * at other times of the shutter where it has none then: without this its nodes there would have
+ * a zero majorant and never be sampled, so it would not blur past where it is at that time. */
+void Octree::dilate_for_velocity(const Object *object)
+{
+  const Geometry *geom = object->get_geometry();
+  if (!geom->is_volume() || resolution_ <= 1) {
+    return;
+  }
+
+  float3 extent = static_cast<const Volume *>(geom)->velocity_extent;
+  if (is_zero(extent)) {
+    return;
+  }
+  if (geom->transform_applied) {
+    const Transform &tfm = object->get_tfm();
+    extent = make_float3(
+        fabsf(tfm.x.x) * extent.x + fabsf(tfm.x.y) * extent.y + fabsf(tfm.x.z) * extent.z,
+        fabsf(tfm.y.x) * extent.x + fabsf(tfm.y.y) * extent.y + fabsf(tfm.y.z) * extent.z,
+        fabsf(tfm.z.x) * extent.x + fabsf(tfm.z.y) * extent.y + fabsf(tfm.z.z) * extent.z);
+  }
+
+  const float3 cells = ceil(extent * position_to_index_scale_);
+  const int radius[3] = {min(int(cells.x), resolution_ - 1),
+                         min(int(cells.y), resolution_ - 1),
+                         min(int(cells.z), resolution_ - 1)};
+
+  /* A box filter of the extrema, one axis at a time. */
+  vector<Extrema<float>> source;
+  for (int axis = 0; axis < 3; axis++) {
+    const int r = radius[axis];
+    if (r <= 0) {
+      continue;
+    }
+    source = sigmas_;
+    const int stride = axis == 0 ? 1 : axis == 1 ? resolution_ : resolution_ * resolution_;
+    parallel_for(0, resolution_ * resolution_, [&](const int line) {
+      /* The cell where this line starts, and its position along the axis. */
+      const int a = line % resolution_;
+      const int b = line / resolution_;
+      const int start = axis == 0 ? flatten_index(0, a, b) :
+                        axis == 1 ? flatten_index(a, 0, b) :
+                                    flatten_index(a, b, 0);
+      for (int i = 0; i < resolution_; i++) {
+        Extrema<float> extrema = source[start + i * stride];
+        const int lo = max(i - r, 0);
+        const int hi = min(i + r, resolution_ - 1);
+        for (int j = lo; j <= hi; j++) {
+          extrema = merge(extrema, source[start + j * stride]);
+        }
+        sigmas_[start + i * stride] = extrema;
+      }
+    });
+  }
+}
+
 float Octree::volume_scale(const Object *object) const
 {
   const Geometry *geom = object->get_geometry();
@@ -368,6 +424,8 @@ void Octree::build(Device *device,
   if (progress.get_cancel()) {
     return;
   }
+
+  dilate_for_velocity(object);
 
   progress.set_substatus(string_printf("Building octree for %s", name));
 

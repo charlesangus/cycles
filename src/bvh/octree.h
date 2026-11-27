@@ -103,6 +103,9 @@ class Octree {
 #else
   void evaluate_volume_density(Device *, Progress &, const Object *, const Shader *);
 #endif
+  /* Widen the extrema of each grid cell to those of every cell the volume's velocity can carry
+   * into it over the shutter. */
+  void dilate_for_velocity(const Object *object);
   /* Convert from position in object space to grid index space. */
   float3 position_to_index_scale_;
   float3 index_to_position_scale_;

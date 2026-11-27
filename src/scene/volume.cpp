@@ -390,6 +390,7 @@ bool VolumeMeshBuilder::empty_grid() const
 struct Vec3Stats {
   double avg[3] = {0.0, 0.0, 0.0};
   double var[3] = {0.0, 0.0, 0.0};
+  double max_abs[3] = {0.0, 0.0, 0.0};
   uint size = 0;
 
   /* Numerically stable way of computing online mean and variance, from Donald Knuth in “The Art
@@ -398,6 +399,7 @@ struct Vec3Stats {
   {
     size++;
     for (int i = 0; i < 3; i++) {
+      max_abs[i] = max(max_abs[i], std::fabs(value[i]));
       const double delta = value[i] - avg[i];
       avg[i] += delta / double(size);
       var[i] += delta * (value[i] - avg[i]);
@@ -409,6 +411,7 @@ struct Vec3Stats {
     if (other.size > 0) {
       const double denom = 1.0 / (double(size + other.size));
       for (int i = 0; i < 3; i++) {
+        max_abs[i] = max(max_abs[i], other.max_abs[i]);
         const double delta = other.avg[i] - avg[i];
         avg[i] += denom * delta * double(other.size);
         var[i] += other.var[i] + denom * delta * delta * double(size) * double(other.size);
@@ -469,9 +472,13 @@ template<typename ChildT> static Vec3Stats compute_stats(const nanovdb::Internal
 
 /** \} */
 
+/* *extent gets the largest distance along each axis that any active velocity value advects the
+ * volume over the shutter. */
 static int estimate_required_velocity_padding(const nanovdb::GridHandle<> &grid,
-                                              const float velocity_scale)
+                                              const float velocity_scale,
+                                              float3 *extent)
 {
+  *extent = zero_float3();
   const auto *typed_grid = grid.template grid<nanovdb::Vec3f>(0);
 
   if (typed_grid == nullptr) {
@@ -491,6 +498,10 @@ static int estimate_required_velocity_padding(const nanovdb::GridHandle<> &grid,
     stats.add(compute_stats(*internal));
   }
   stats.finalize();
+
+  *extent = make_float3(
+                float(stats.max_abs[0]), float(stats.max_abs[1]), float(stats.max_abs[2])) *
+            std::fabs(velocity_scale);
 
   /* A standard score of 2.32635 makes sure only 1% of the values are above `avg + score * std`. */
   const double score = 2.32635;
@@ -642,6 +653,7 @@ void GeometryManager::create_volume_mesh(const Scene *scene, Volume *volume, Pro
    * as having changed. */
   volume->clear(true);
   volume->need_update_rebuild = true;
+  volume->velocity_extent = zero_float3();
 
   if (!volume_shader) {
     return;
@@ -676,8 +688,11 @@ void GeometryManager::create_volume_mesh(const Scene *scene, Volume *volume, Pro
 
     /* Add padding based on the maximum velocity vector. */
     if (attr.std == ATTR_STD_VOLUME_VELOCITY && scene->need_motion() != Scene::MOTION_NONE) {
-      pad_size = max(pad_size,
-                     estimate_required_velocity_padding(grid, volume->get_velocity_scale()));
+      float3 extent;
+      pad_size = max(
+          pad_size,
+          estimate_required_velocity_padding(grid, volume->get_velocity_scale(), &extent));
+      volume->velocity_extent = max(volume->velocity_extent, extent);
     }
 
     builder.add_grid(grid);
