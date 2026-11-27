@@ -5,6 +5,7 @@
 #include "scene/volume.h"
 #include "scene/attribute.h"
 #include "scene/background.h"
+#include "scene/camera.h"
 #include "scene/geometry.h"
 #include "scene/image_vdb.h"
 #include "scene/integrator.h"
@@ -472,10 +473,13 @@ template<typename ChildT> static Vec3Stats compute_stats(const nanovdb::Internal
 
 /** \} */
 
-/* *extent gets the largest distance along each axis that any active velocity value advects the
- * volume over the shutter. */
+/* *extent gets how far along each axis velocity advects the volume over the shutter, from
+ * shutter_reach (the longest time, in shutters, from the current frame to either end of the
+ * shutter) and the same robust estimate of the velocity as the padding, which bounds where the
+ * volume is sampled at all. */
 static int estimate_required_velocity_padding(const nanovdb::GridHandle<> &grid,
                                               const float velocity_scale,
+                                              const float shutter_reach,
                                               float3 *extent)
 {
   *extent = zero_float3();
@@ -499,16 +503,15 @@ static int estimate_required_velocity_padding(const nanovdb::GridHandle<> &grid,
   }
   stats.finalize();
 
-  *extent = make_float3(
-                float(stats.max_abs[0]), float(stats.max_abs[1]), float(stats.max_abs[2])) *
-            std::fabs(velocity_scale);
-
   /* A standard score of 2.32635 makes sure only 1% of the values are above `avg + score * std`. */
   const double score = 2.32635;
   double estimated_padding = 0.0f;
+  float advected[3];
   for (int i = 0; i < 3; i++) {
     const double max_velocity = max(std::fabs(stats.avg[i] + score * sqrt(stats.var[i])),
                                     std::fabs(stats.avg[i] - score * sqrt(stats.var[i])));
+    advected[i] = float(min(max_velocity, stats.max_abs[i]) * std::fabs(velocity_scale) *
+                        double(shutter_reach));
     const double max_dist_in_voxel = max_velocity * double(velocity_scale) / voxel_size[i];
 
     /* Clamp padding to half of the volume size, and find the max padding in all 3 dimensions. */
@@ -516,6 +519,8 @@ static int estimate_required_velocity_padding(const nanovdb::GridHandle<> &grid,
         min(max_dist_in_voxel, 0.5 * double(typed_grid->tree().bbox().dim()[i])),
         estimated_padding);
   }
+
+  *extent = make_float3(advected[0], advected[1], advected[2]);
 
   return static_cast<int>(std::ceil(estimated_padding));
 }
@@ -663,6 +668,9 @@ void GeometryManager::create_volume_mesh(const Scene *scene, Volume *volume, Pro
   /* Create volume mesh builder. */
   VolumeMeshBuilder builder;
 
+  const float frame_time = scene->camera->get_kernel_motion_frame_time();
+  const float shutter_reach = max(fabsf(frame_time), fabsf(1.0f - frame_time));
+
   for (Attribute &attr : volume->attributes.attributes) {
     if (attr.element != ATTR_ELEMENT_VOXEL) {
       continue;
@@ -689,9 +697,9 @@ void GeometryManager::create_volume_mesh(const Scene *scene, Volume *volume, Pro
     /* Add padding based on the maximum velocity vector. */
     if (attr.std == ATTR_STD_VOLUME_VELOCITY && scene->need_motion() != Scene::MOTION_NONE) {
       float3 extent;
-      pad_size = max(
-          pad_size,
-          estimate_required_velocity_padding(grid, volume->get_velocity_scale(), &extent));
+      pad_size = max(pad_size,
+                     estimate_required_velocity_padding(
+                         grid, volume->get_velocity_scale(), shutter_reach, &extent));
       volume->velocity_extent = max(volume->velocity_extent, extent);
     }
 

@@ -559,6 +559,8 @@ enum MotionPosition {
   MOTION_POSITION_CENTER = 1,
   /* Shutter closes at the current frame. */
   MOTION_POSITION_END = 2,
+  /* The current frame is at the camera's motion frame time. */
+  MOTION_POSITION_CUSTOM = 3,
 
   MOTION_NUM_POSITIONS,
 };
@@ -1248,7 +1250,8 @@ struct KernelCamera {
   int rolling_shutter_type;
   float rolling_shutter_duration;
 
-  int motion_position;
+  /* The ray time, from 0 at the shutter's opening to 1 at its closing, of the current frame. */
+  float motion_frame_time;
 
   /* Real lens (kernel/camera/lens.h; set up in Camera::update). lens_num_surfaces = 0: off. Lens
    * space is millimetres, z from the front vertex towards the sensor. */

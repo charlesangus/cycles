@@ -60,6 +60,9 @@ class Camera : public Node {
   /* motion blur */
   NODE_SOCKET_API(float, shuttertime)
   NODE_SOCKET_API(MotionPosition, motion_position)
+  /* With MOTION_POSITION_CUSTOM: the current frame's time, from 0 at the shutter's opening to 1
+   * at its closing, outside that range when the shutter does not span the frame. */
+  NODE_SOCKET_API(float, motion_frame_time)
   NODE_SOCKET_API_ARRAY(array<float>, shutter_curve)
   size_t shutter_table_offset;
 
@@ -224,6 +227,8 @@ class Camera : public Node {
   void compute_auto_viewplane();
 
   void update(Scene *scene);
+  /* The current frame's time, from 0 at the shutter's opening to 1 at its closing. */
+  float get_kernel_motion_frame_time() const;
 
   void update_interactive_motion();
 

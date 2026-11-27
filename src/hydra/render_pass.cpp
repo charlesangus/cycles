@@ -26,7 +26,9 @@
 #include <pxr/imaging/hd/changeTracker.h>
 #include <pxr/imaging/hd/renderIndex.h>
 #include <pxr/imaging/hd/renderPassState.h>
+#include <pxr/imaging/hd/sceneGlobalsSchema.h>
 
+#include <cmath>
 #include <cstring>
 
 HDCYCLES_NAMESPACE_OPEN_SCOPE
@@ -125,28 +127,27 @@ void HdCyclesRenderPass::_Execute(const HdRenderPassStateSharedPtr &renderPassSt
 
     const auto *const camera = static_cast<const HdCyclesCamera *>(renderPassState->GetCamera());
 
-    float shutterOpen = camera ? float(camera->GetShutterOpen()) : 0.0f;
-    float shutterClose = camera ? float(camera->GetShutterClose()) : 0.0f;
-    const bool shutterIsOpen = shutterOpen < shutterClose;
+    const bool shutterIsOpen = camera && camera->GetShutterOpen() < camera->GetShutterClose();
     const bool motionBlur = _renderParam->GetMotionBlur().value_or(shutterIsOpen);
-    if (!motionBlur || !shutterIsOpen) {
-      shutterOpen = 0.0f;
-      shutterClose = 0.0f;
-    }
+    const GfVec2f shutter = MotionShutter(camera);
+    const float shutterOpen = shutter[0];
+    const float shutterClose = shutter[1];
 
     if (scene->integrator->get_motion_blur() != motionBlur) {
       scene->integrator->set_motion_blur(motionBlur);
       scene->integrator->tag_update(scene, Integrator::UPDATE_NONE);
     }
 
-    /* Rprims sample their motion over this interval as they sync, which is before the render
-     * pass learns its camera. When it changes they sync again and this pass renders nothing, as
-     * it would converge on the old motion. A volume reads its velocity only with motion blur on,
-     * hence its fields too. */
-    if (_renderParam->SetMotionShutter(shutterOpen, shutterClose)) {
-      GetRenderIndex()->GetChangeTracker().MarkAllRprimsDirty(HdChangeTracker::DirtyTransform |
-                                                              HdChangeTracker::DirtyPoints |
-                                                              HdChangeTracker::DirtyVolumeField);
+    /* Rprims sampled their motion over the shutter _Sync took from the published camera. A client
+     * that renders through another camera gets them synced again over this one, and this pass
+     * renders nothing, as it would converge on the old motion. */
+    if (camera) {
+      _renderCamera = camera->GetId();
+      if (_renderCamera != _primaryCamera) {
+        _followPrimaryCamera = false;
+      }
+    }
+    if (SetMotionShutter(shutter)) {
       ResetConverged();
       scene->mutex.unlock();
       return;
@@ -201,43 +202,13 @@ void HdCyclesRenderPass::_Execute(const HdRenderPassStateSharedPtr &renderPassSt
                                           dicingCamera);
     }
 
-    /* Cycles tessellates only meshes that changed, so a mesh diced in pixel space keeps the
-     * tessellation of where the dicing camera was until it is told to dice again. */
-    std::array<float, 21> dicingView;
-    const Transform dicingMatrix = dicingCamera->get_matrix();
-    std::memcpy(dicingView.data(), &dicingMatrix, sizeof(float) * 12);
-    dicingView[12] = dicingCamera->get_viewplane_left();
-    dicingView[13] = dicingCamera->get_viewplane_right();
-    dicingView[14] = dicingCamera->get_viewplane_bottom();
-    dicingView[15] = dicingCamera->get_viewplane_top();
-    dicingView[16] = float(dicingCamera->get_full_width());
-    dicingView[17] = float(dicingCamera->get_full_height());
-    dicingView[18] = float(dicingCamera->get_camera_type());
-    dicingView[19] = dicingCamera->get_fov();
-    dicingView[20] = dicingCamera->get_nearclip();
-    if (dicingView != _lastDicingView) {
-      _lastDicingView = dicingView;
-      for (Geometry *const geom : scene->geometry) {
-        if (!geom->is_mesh()) {
-          continue;
-        }
-        Mesh *const mesh = static_cast<Mesh *>(geom);
-        if (mesh->get_subdivision_type() != Mesh::SUBDIVISION_NONE &&
-            mesh->get_subd_adaptive_space() == Mesh::SUBDIVISION_ADAPTIVE_SPACE_PIXEL)
-        {
-          mesh->tag_subd_dicing_rate_modified();
-          mesh->tag_update(scene, true);
-        }
-      }
-    }
+    UpdatePixelDicing(scene, dicingCamera);
 
     if (shutterIsOpen && motionBlur) {
       scene->camera->set_shuttertime(shutterClose - shutterOpen);
-      /* Cycles places the current frame, at which volumes advect by their velocity, at the
-       * shutter's start, middle or end only: a shutter around the frame counts as centred. */
-      scene->camera->set_motion_position(shutterClose <= 0.0f ? MOTION_POSITION_END :
-                                         shutterOpen >= 0.0f  ? MOTION_POSITION_START :
-                                                                MOTION_POSITION_CENTER);
+      /* Volumes advect by their velocity from the current frame. */
+      scene->camera->set_motion_position(MOTION_POSITION_CUSTOM);
+      scene->camera->set_motion_frame_time(-shutterOpen / (shutterClose - shutterOpen));
     }
 
     // Reset session if the session, scene, camera or AOV bindings changed
@@ -274,17 +245,166 @@ void HdCyclesRenderPass::_Execute(const HdRenderPassStateSharedPtr &renderPassSt
   session->draw();
 }
 
+/* Cycles tessellates only meshes that changed, so a mesh diced in pixel space keeps the
+ * tessellation of where the dicing camera was until it is told to dice again. Dicing again costs
+ * as much as the first time, so a mesh is diced again only when the camera changed the size of a
+ * pixel, which is what the dicing rate is measured in, at its bounds by more than a fifth. */
+void HdCyclesRenderPass::UpdatePixelDicing(Scene *scene, Camera *dicingCamera)
+{
+  std::array<float, 21> dicingView;
+  const Transform dicingMatrix = dicingCamera->get_matrix();
+  std::memcpy(dicingView.data(), &dicingMatrix, sizeof(float) * 12);
+  dicingView[12] = dicingCamera->get_viewplane_left();
+  dicingView[13] = dicingCamera->get_viewplane_right();
+  dicingView[14] = dicingCamera->get_viewplane_bottom();
+  dicingView[15] = dicingCamera->get_viewplane_top();
+  dicingView[16] = float(dicingCamera->get_full_width());
+  dicingView[17] = float(dicingCamera->get_full_height());
+  dicingView[18] = float(dicingCamera->get_camera_type());
+  dicingView[19] = dicingCamera->get_fov();
+  dicingView[20] = dicingCamera->get_nearclip();
+  const bool viewChanged = dicingView != _lastDicingView;
+  _lastDicingView = dicingView;
+
+  constexpr float tolerance = 1.2f;
+  bool cameraUpdated = false;
+  std::unordered_map<const Mesh *, PixelSizes> diced;
+  for (Geometry *const geom : scene->geometry) {
+    if (!geom->is_mesh()) {
+      continue;
+    }
+    Mesh *const mesh = static_cast<Mesh *>(geom);
+    if (mesh->get_subdivision_type() == Mesh::SUBDIVISION_NONE ||
+        mesh->get_subd_adaptive_space() != Mesh::SUBDIVISION_ADAPTIVE_SPACE_PIXEL)
+    {
+      continue;
+    }
+    const auto previous = _dicedPixelSizes.find(mesh);
+    const bool tessellates = mesh->need_tesselation();
+    if (!tessellates && !viewChanged && previous != _dicedPixelSizes.end()) {
+      diced.emplace(mesh, previous->second);
+      continue;
+    }
+
+    /* Geometry tessellation updates the dicing camera the same way before it dices. */
+    if (!cameraUpdated) {
+      dicingCamera->set_screen_size(dicingCamera->get_full_width(),
+                                    dicingCamera->get_full_height());
+      dicingCamera->update(scene);
+      cameraUpdated = true;
+    }
+    PixelSizes sizes;
+    const bool measured = MeasurePixelSizes(dicingCamera, *mesh, sizes);
+
+    /* A mesh with no record and an unchanged view was diced from this view, before its bounds
+     * were known. */
+    bool dice = false;
+    if (!tessellates && viewChanged) {
+      dice = !measured || previous == _dicedPixelSizes.end();
+      for (size_t i = 0; !dice && i < sizes.size(); i++) {
+        const float ratio = sizes[i] / previous->second[i];
+        dice = !(ratio < tolerance && ratio > 1.0f / tolerance);
+      }
+      if (!dice) {
+        diced.emplace(mesh, previous->second);
+        continue;
+      }
+    }
+    if (dice) {
+      mesh->tag_subd_dicing_rate_modified();
+      mesh->tag_update(scene, true);
+    }
+    if (measured) {
+      diced.emplace(mesh, sizes);
+    }
+  }
+  _dicedPixelSizes.swap(diced);
+}
+
+/* The size of a pixel at the corners and centre of the mesh's bounds. */
+bool HdCyclesRenderPass::MeasurePixelSizes(Camera *dicingCamera,
+                                           const Mesh &mesh,
+                                           PixelSizes &sizes)
+{
+  if (!mesh.bounds.valid()) {
+    return false;
+  }
+  const Transform &objectToWorld = mesh.get_subd_objecttoworld();
+  for (int corner = 0; corner < 8; corner++) {
+    const float3 P = make_float3((corner & 1) ? mesh.bounds.max.x : mesh.bounds.min.x,
+                                 (corner & 2) ? mesh.bounds.max.y : mesh.bounds.min.y,
+                                 (corner & 4) ? mesh.bounds.max.z : mesh.bounds.min.z);
+    sizes[corner] = dicingCamera->world_to_raster_size(transform_point(&objectToWorld, P));
+  }
+  sizes[8] = dicingCamera->world_to_raster_size(
+      transform_point(&objectToWorld, mesh.bounds.center()));
+  for (const float size : sizes) {
+    if (!(size > 0.0f) || !std::isfinite(size)) {
+      return false;
+    }
+  }
+  return true;
+}
+
 void HdCyclesRenderPass::_MarkCollectionDirty() {}
 
-// Hydra syncs render passes before rprims, so meshes marked dirty here sync this frame
+GfVec2f HdCyclesRenderPass::MotionShutter(const HdCamera *camera) const
+{
+  if (!camera || camera->GetShutterOpen() >= camera->GetShutterClose() ||
+      !_renderParam->GetMotionBlur().value_or(true))
+  {
+    return GfVec2f(0.0f);
+  }
+  return GfVec2f(float(camera->GetShutterOpen()), float(camera->GetShutterClose()));
+}
+
+/* A volume reads its velocity only with motion blur on, hence its fields too. */
+bool HdCyclesRenderPass::SetMotionShutter(const GfVec2f &shutter)
+{
+  if (!_renderParam->SetMotionShutter(shutter[0], shutter[1])) {
+    return false;
+  }
+  GetRenderIndex()->GetChangeTracker().MarkAllRprimsDirty(HdChangeTracker::DirtyTransform |
+                                                          HdChangeTracker::DirtyPoints |
+                                                          HdChangeTracker::DirtyVolumeField);
+  return true;
+}
+
+// Hydra syncs render passes after sprims and before rprims, so rprims marked dirty here sync
+// this frame
 void HdCyclesRenderPass::_Sync()
 {
+  HdRenderIndex *const index = GetRenderIndex();
+
+  /* The render pass learns its camera only after rprims sync, but the camera the client
+   * published as primary has already synced, so rprims sample over its shutter the first time.
+   * After a client rendered through another camera, that camera is followed until the published
+   * one changes, so the two never alternate and resync every frame. */
+  SdfPath primaryCamera;
+  if (HdSceneIndexBaseRefPtr sceneIndex = index->GetTerminalSceneIndex()) {
+    if (HdPathDataSourceHandle ds =
+            HdSceneGlobalsSchema::GetFromSceneIndex(sceneIndex).GetPrimaryCameraPrim())
+    {
+      primaryCamera = ds->GetTypedValue(0.0f);
+    }
+  }
+  if (primaryCamera != _primaryCamera) {
+    _primaryCamera = primaryCamera;
+    _followPrimaryCamera = true;
+  }
+  const SdfPath &shutterCamera = _followPrimaryCamera && !primaryCamera.IsEmpty() ?
+                                     primaryCamera :
+                                     _renderCamera;
+  if (!shutterCamera.IsEmpty()) {
+    SetMotionShutter(MotionShutter(
+        dynamic_cast<const HdCamera *>(index->GetSprim(HdPrimTypeTokens->camera, shutterCamera))));
+  }
+
   if (_renderParam->subdivisionVersion == _lastSubdivisionVersion) {
     return;
   }
   _lastSubdivisionVersion = _renderParam->subdivisionVersion;
 
-  HdRenderIndex *const index = GetRenderIndex();
   HdChangeTracker &tracker = index->GetChangeTracker();
   for (const SdfPath &id : index->GetRprimIds()) {
     if (dynamic_cast<const HdCyclesMesh *>(index->GetRprim(id))) {

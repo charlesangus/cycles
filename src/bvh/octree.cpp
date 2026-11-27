@@ -251,10 +251,45 @@ void Octree::evaluate_volume_density(Device *device,
       });
 }
 
+/* Merges every window of 2 * radius + 1 values of a line, clipped to the line, in time linear in
+ * its length whatever the radius (van Herk / Gil-Werman): the window starting at each padded
+ * position spans at most two blocks of the window's size, so it is the suffix of one merged with
+ * the prefix of the next. */
+static void merge_windows(const Extrema<float> *in,
+                          const int stride,
+                          const int n,
+                          const int radius,
+                          Extrema<float> *out,
+                          vector<Extrema<float>> &prefix,
+                          vector<Extrema<float>> &suffix)
+{
+  const Extrema<float> none(FLT_MAX, -FLT_MAX);
+  const int window = 2 * radius + 1;
+  const int padded = int(divide_up(size_t(n + 2 * radius), size_t(window))) * window;
+  prefix.resize(padded);
+  suffix.resize(padded);
+  for (int j = 0; j < padded; j++) {
+    const int k = j - radius;
+    prefix[j] = (k >= 0 && k < n) ? in[k * stride] : none;
+    suffix[j] = prefix[j];
+  }
+  for (int block = 0; block < padded; block += window) {
+    for (int j = block + 1; j < block + window; j++) {
+      prefix[j] = merge(prefix[j - 1], prefix[j]);
+    }
+    for (int j = block + window - 2; j >= block; j--) {
+      suffix[j] = merge(suffix[j + 1], suffix[j]);
+    }
+  }
+  for (int i = 0; i < n; i++) {
+    out[i * stride] = merge(suffix[i], prefix[i + window - 1]);
+  }
+}
+
 /* The density is evaluated at one time only, but a volume advected by its velocity has density
  * at other times of the shutter where it has none then: without this its nodes there would have
  * a zero majorant and never be sampled, so it would not blur past where it is at that time. */
-void Octree::dilate_for_velocity(const Object *object)
+void Octree::dilate_for_velocity(Progress &progress, const Object *object)
 {
   const Geometry *geom = object->get_geometry();
   if (!geom->is_volume() || resolution_ <= 1) {
@@ -273,14 +308,16 @@ void Octree::dilate_for_velocity(const Object *object)
         fabsf(tfm.z.x) * extent.x + fabsf(tfm.z.y) * extent.y + fabsf(tfm.z.z) * extent.z);
   }
 
-  const float3 cells = ceil(extent * position_to_index_scale_);
-  const int radius[3] = {min(int(cells.x), resolution_ - 1),
-                         min(int(cells.y), resolution_ - 1),
-                         min(int(cells.z), resolution_ - 1)};
+  /* Past the grid's size every cell merges the whole line, so a larger radius changes nothing. */
+  const float3 cells = min(ceil(extent * position_to_index_scale_), make_float3(resolution_));
+  const int radius[3] = {int(cells.x), int(cells.y), int(cells.z)};
 
   /* A box filter of the extrema, one axis at a time. */
   vector<Extrema<float>> source;
   for (int axis = 0; axis < 3; axis++) {
+    if (progress.get_cancel()) {
+      return;
+    }
     const int r = radius[axis];
     if (r <= 0) {
       continue;
@@ -288,21 +325,16 @@ void Octree::dilate_for_velocity(const Object *object)
     source = sigmas_;
     const int stride = axis == 0 ? 1 : axis == 1 ? resolution_ : resolution_ * resolution_;
     parallel_for(0, resolution_ * resolution_, [&](const int line) {
-      /* The cell where this line starts, and its position along the axis. */
+      /* The cell where this line starts. */
       const int a = line % resolution_;
       const int b = line / resolution_;
       const int start = axis == 0 ? flatten_index(0, a, b) :
                         axis == 1 ? flatten_index(a, 0, b) :
                                     flatten_index(a, b, 0);
-      for (int i = 0; i < resolution_; i++) {
-        Extrema<float> extrema = source[start + i * stride];
-        const int lo = max(i - r, 0);
-        const int hi = min(i + r, resolution_ - 1);
-        for (int j = lo; j <= hi; j++) {
-          extrema = merge(extrema, source[start + j * stride]);
-        }
-        sigmas_[start + i * stride] = extrema;
-      }
+      thread_local vector<Extrema<float>> prefix;
+      thread_local vector<Extrema<float>> suffix;
+      merge_windows(
+          source.data() + start, stride, resolution_, r, sigmas_.data() + start, prefix, suffix);
     });
   }
 }
@@ -425,7 +457,10 @@ void Octree::build(Device *device,
     return;
   }
 
-  dilate_for_velocity(object);
+  dilate_for_velocity(progress, object);
+  if (progress.get_cancel()) {
+    return;
+  }
 
   progress.set_substatus(string_printf("Building octree for %s", name));
 

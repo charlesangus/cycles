@@ -55,7 +55,9 @@ NODE_DEFINE(Camera)
   motion_position_enum.insert("start", MOTION_POSITION_START);
   motion_position_enum.insert("center", MOTION_POSITION_CENTER);
   motion_position_enum.insert("end", MOTION_POSITION_END);
+  motion_position_enum.insert("custom", MOTION_POSITION_CUSTOM);
   SOCKET_ENUM(motion_position, "Motion Position", motion_position_enum, MOTION_POSITION_CENTER);
+  SOCKET_FLOAT(motion_frame_time, "Motion Frame Time", 0.5f);
 
   static NodeEnum rolling_shutter_type_enum;
   rolling_shutter_type_enum.insert("none", ROLLING_SHUTTER_NONE);
@@ -538,6 +540,20 @@ void Camera::update_lens(KernelCamera *kcam)
   kcam->lens_num_surfaces = n;
 }
 
+float Camera::get_kernel_motion_frame_time() const
+{
+  switch (motion_position) {
+    case MOTION_POSITION_START:
+      return 0.0f;
+    case MOTION_POSITION_CENTER:
+      return 0.5f;
+    case MOTION_POSITION_END:
+      return 1.0f;
+    default:
+      return motion_frame_time;
+  }
+}
+
 void Camera::update(Scene *scene)
 {
   const Scene::MotionType need_motion = scene->need_motion();
@@ -758,7 +774,7 @@ void Camera::update(Scene *scene)
 
   /* motion blur */
   kcam->shuttertime = (need_motion == Scene::MOTION_BLUR) ? shuttertime : -1.0f;
-  kcam->motion_position = motion_position;
+  kcam->motion_frame_time = get_kernel_motion_frame_time();
 
   /* type */
   kcam->type = camera_type;

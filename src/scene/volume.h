@@ -31,8 +31,8 @@ class Volume : public Mesh {
   void merge_grids(const Scene *scene);
 
   /* How far along each axis, in the space of the volume mesh before any object transform,
-   * velocity can advect the volume over the whole shutter: zero without motion blur. Set when
-   * the volume mesh is built. */
+   * velocity advects the volume between the current frame and either end of the shutter: zero
+   * without motion blur. Set when the volume mesh is built. */
   float3 velocity_extent = zero_float3();
 
   void clear(bool preserve_shaders = false) override;
