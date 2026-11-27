@@ -77,6 +77,38 @@ VtValue ComputeTriangulatedFaceVaryingPrimvar(VtValue value,
   return VtValue();
 }
 
+// An empty rule is unauthored, so it takes the USD fallback
+Mesh::SubdivisionBoundaryInterpolation BoundaryInterpolation(const TfToken &rule)
+{
+  if (rule == PxOsdOpenSubdivTokens->none) {
+    return Mesh::SUBDIVISION_BOUNDARY_NONE;
+  }
+  if (rule == PxOsdOpenSubdivTokens->edgeOnly) {
+    return Mesh::SUBDIVISION_BOUNDARY_EDGE_ONLY;
+  }
+  return Mesh::SUBDIVISION_BOUNDARY_EDGE_AND_CORNER;
+}
+
+Mesh::SubdivisionFVarInterpolation FaceVaryingInterpolation(const TfToken &rule)
+{
+  if (rule == PxOsdOpenSubdivTokens->none) {
+    return Mesh::SUBDIVISION_FVAR_LINEAR_NONE;
+  }
+  if (rule == PxOsdOpenSubdivTokens->cornersOnly) {
+    return Mesh::SUBDIVISION_FVAR_LINEAR_CORNERS_ONLY;
+  }
+  if (rule == PxOsdOpenSubdivTokens->cornersPlus2) {
+    return Mesh::SUBDIVISION_FVAR_LINEAR_CORNERS_PLUS2;
+  }
+  if (rule == PxOsdOpenSubdivTokens->boundaries) {
+    return Mesh::SUBDIVISION_FVAR_LINEAR_BOUNDARIES;
+  }
+  if (rule == PxOsdOpenSubdivTokens->all) {
+    return Mesh::SUBDIVISION_FVAR_LINEAR_ALL;
+  }
+  return Mesh::SUBDIVISION_FVAR_LINEAR_CORNERS_PLUS1;
+}
+
 const HdCyclesSubdivisionSettings &SubdivisionSettings(HdSceneDelegate *sceneDelegate)
 {
   static const HdCyclesSubdivisionSettings defaults;
@@ -215,7 +247,7 @@ void HdCyclesMesh::Populate(HdSceneDelegate *sceneDelegate, HdDirtyBits dirtyBit
   rebuild = (_geom->triangles_is_modified()) || (_geom->subd_start_corner_is_modified()) ||
             (_geom->subd_num_corners_is_modified()) || (_geom->subd_shader_is_modified()) ||
             (_geom->subd_smooth_is_modified()) || (_geom->subd_ptex_offset_is_modified()) ||
-            (_geom->subd_face_corners_is_modified());
+            (_geom->subd_face_corners_is_modified()) || (_geom->subd_hole_faces_is_modified());
 }
 
 void HdCyclesMesh::PopulatePoints(HdSceneDelegate *sceneDelegate)
@@ -631,6 +663,11 @@ void HdCyclesMesh::PopulateTopology(HdSceneDelegate *sceneDelegate)
     }
     _topology.SetSubdivTags(subdivTags);
 
+    _geom->set_subdivision_boundary_interpolation(
+        BoundaryInterpolation(subdivTags.GetVertexInterpolationRule()));
+    _geom->set_subdivision_fvar_interpolation(
+        FaceVaryingInterpolation(subdivTags.GetFaceVaryingInterpolationRule()));
+
     size_t numCorners = 0;
     for (const int vertCount : vertCounts) {
       numCorners += vertCount;
@@ -647,7 +684,6 @@ void HdCyclesMesh::PopulateTopology(HdSceneDelegate *sceneDelegate)
     int *subd_num_corners = _geom->get_subd_num_corners().data();
     int *subd_ptex_offset = _geom->get_subd_ptex_offset().data();
 
-    // TODO: Handle hole indices
     int ptex_offset = 0;
     size_t faceIndex = 0;
     size_t indexOffset = 0;
@@ -664,6 +700,14 @@ void HdCyclesMesh::PopulateTopology(HdSceneDelegate *sceneDelegate)
 
     std::copy_n(faceShaders.data(), faceShaders.size(), _geom->get_subd_shader().data());
     std::ranges::fill(_geom->get_subd_smooth(), smooth);
+
+    array<int> holeFaces;
+    for (const int face : _topology.GetHoleIndices()) {
+      if (face >= 0 && face < _topology.GetNumFaces()) {
+        holeFaces.push_back_slow(face);
+      }
+    }
+    _geom->set_subd_hole_faces(holeFaces);
 
     _geom->tag_subd_face_corners_modified();
     _geom->tag_subd_start_corner_modified();
@@ -702,13 +746,12 @@ void HdCyclesMesh::PopulateTopology(HdSceneDelegate *sceneDelegate)
         indexOffset += creaseLength;
         creaseLengthOffset++;
       }
+    }
 
-      const VtIntArray cornerIndices = subdivTags.GetCornerIndices();
-      const VtFloatArray cornerWeights = subdivTags.GetCornerWeights();
-
-      for (size_t i = 0; i < cornerIndices.size(); ++i) {
-        _geom->add_vertex_crease(cornerIndices[i], cornerWeights[i]);
-      }
+    const VtIntArray cornerIndices = subdivTags.GetCornerIndices();
+    const VtFloatArray cornerWeights = subdivTags.GetCornerWeights();
+    for (size_t i = 0; i < cornerIndices.size() && i < cornerWeights.size(); ++i) {
+      _geom->add_vertex_crease(cornerIndices[i], cornerWeights[i]);
     }
 
     float dicingRate = 0.0f;

@@ -81,7 +81,10 @@ class DiagSplit {
  public:
   explicit DiagSplit(const SubdParams &params);
 
-  void split_patches(const Patch *patches, const size_t patches_byte_stride);
+  /* Faces flagged in `hole` have no limit surface and are left out. */
+  void split_patches(const Patch *patches,
+                     const size_t patches_byte_stride,
+                     const vector<bool> &hole);
 
   size_t get_num_subpatches() const
   {

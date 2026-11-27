@@ -151,6 +151,8 @@ class Mesh : public Geometry {
   NODE_SOCKET_API_ARRAY(array<int>, subd_shader)
   NODE_SOCKET_API_ARRAY(array<bool>, subd_smooth)
   NODE_SOCKET_API_ARRAY(array<int>, subd_ptex_offset)
+  /* Faces that shape the limit surface of their neighbours but are not rendered themselves. */
+  NODE_SOCKET_API_ARRAY(array<int>, subd_hole_faces)
 
   NODE_SOCKET_API_ARRAY(array<int>, subd_face_corners)
 
@@ -216,6 +218,7 @@ class Mesh : public Geometry {
   PrimitiveType primitive_type() const override;
 
   void tessellate(SubdParams &params);
+  void place_unused_base_verts(const vector<bool> &hole);
 
   SubdFace get_subd_face(const size_t index) const;
   size_t get_num_subd_faces() const

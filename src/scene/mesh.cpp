@@ -315,6 +315,7 @@ NODE_DEFINE(Mesh)
   SOCKET_INT_ARRAY(subd_shader, "Subdivision Face Shader", array<int>());
   SOCKET_BOOLEAN_ARRAY(subd_smooth, "Subdivision Face Smooth", array<bool>());
   SOCKET_INT_ARRAY(subd_ptex_offset, "Subdivision Face PTex Offset", array<int>());
+  SOCKET_INT_ARRAY(subd_hole_faces, "Subdivision Hole Faces", array<int>());
 
   /* Subdivisions parameters */
   static NodeEnum subd_adaptive_space_enum;
@@ -337,7 +338,9 @@ bool Mesh::need_tesselation()
   return (subdivision_type != SUBDIVISION_NONE) &&
          (position_is_modified() || subd_dicing_rate_is_modified() ||
           subd_adaptive_space_is_modified() || subd_objecttoworld_is_modified() ||
-          subd_max_level_is_modified());
+          subd_max_level_is_modified() || subd_hole_faces_is_modified() ||
+          subdivision_boundary_interpolation_is_modified() ||
+          subdivision_fvar_interpolation_is_modified());
 }
 
 Mesh::Mesh(const NodeType *node_type, Type geom_type_)
@@ -413,10 +416,13 @@ void Mesh::clear(bool preserve_shaders, bool preserve_voxel_data)
   subd_shader.clear();
   subd_smooth.clear();
   subd_ptex_offset.clear();
+  subd_hole_faces.clear();
   subd_face_corners.clear();
 
   subd_creases_edge.clear();
   subd_creases_weight.clear();
+  subd_vert_creases.clear();
+  subd_vert_creases_weight.clear();
 
   subd_attributes.clear();
   attributes.clear(preserve_voxel_data);

@@ -72,6 +72,13 @@ bool TopologyRefinerFactory<OsdMesh>::assignComponentTags(TopologyRefiner &refin
   /* Historical maximum crease weight used at Pixar, influencing the maximum in OpenSubDiv. */
   static constexpr float CREASE_SCALE = 10.0f;
 
+  const int num_base_faces = mesh.get_num_subd_faces();
+  for (const int face : mesh.get_subd_hole_faces()) {
+    if (face >= 0 && face < num_base_faces) {
+      setBaseFaceHole(refiner, face, true);
+    }
+  }
+
   const size_t num_creases = mesh.get_subd_creases_weight().size();
   const size_t num_vertex_creases = mesh.get_subd_vert_creases().size();
 

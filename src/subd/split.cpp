@@ -753,7 +753,9 @@ void DiagSplit::split_ngon(const Mesh::SubdFace &face,
   }
 }
 
-void DiagSplit::split_patches(const Patch *patches, const size_t patches_byte_stride)
+void DiagSplit::split_patches(const Patch *patches,
+                              const size_t patches_byte_stride,
+                              const vector<bool> &hole)
 {
   /* TODO: reuse edge factor vertex position computations. */
   /* TODO: support not splitting n-gons if not needed. */
@@ -767,6 +769,9 @@ void DiagSplit::split_patches(const Patch *patches, const size_t patches_byte_st
 
   /* Split all faces in the mesh. */
   for (int f = 0; f < params.mesh->get_num_subd_faces(); f++) {
+    if (hole[f]) {
+      continue;
+    }
     Mesh::SubdFace face = params.mesh->get_subd_face(f);
     const Patch *patch = (const Patch *)(((char *)patches) +
                                          (face.ptex_offset * patches_byte_stride));

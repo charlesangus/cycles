@@ -46,6 +46,24 @@ void Mesh::tessellate(SubdParams &params)
     subdivision_type = SUBDIVISION_LINEAR;
   }
 
+  vector<bool> hole(num_faces, false);
+  for (const int face : get_subd_hole_faces()) {
+    if (face >= 0 && face < num_faces) {
+      hole[face] = true;
+    }
+  }
+#ifdef WITH_OPENSUBDIV
+  /* OpenSubdiv also leaves the boundary faces out when boundaries are not interpolated. */
+  if (subdivision_type == SUBDIVISION_CATMULL_CLARK) {
+    const Far::TopologyLevel &base = osd_data.refiner->GetLevel(0);
+    for (int f = 0; f < num_faces; f++) {
+      if (base.IsFaceHole(f)) {
+        hole[f] = true;
+      }
+    }
+  }
+#endif
+
   /* count patches */
   int num_patches = 0;
   for (int f = 0; f < num_faces; f++) {
@@ -88,7 +106,7 @@ void Mesh::tessellate(SubdParams &params)
 
     /* Split patches. */
     DiagSplit split(params);
-    split.split_patches(osd_patches.data(), sizeof(OsdPatch));
+    split.split_patches(osd_patches.data(), sizeof(OsdPatch), hole);
 
     /* Setup interpolation. */
     SubdAttributeInterpolation interpolation(*this, osd_mesh, osd_data);
@@ -159,7 +177,7 @@ void Mesh::tessellate(SubdParams &params)
 
     /* Split patches. */
     DiagSplit split(params);
-    split.split_patches(linear_patches.data(), sizeof(LinearQuadPatch));
+    split.split_patches(linear_patches.data(), sizeof(LinearQuadPatch), hole);
 
     /* Setup interpolation. */
 #ifdef WITH_OPENSUBDIV
@@ -173,7 +191,50 @@ void Mesh::tessellate(SubdParams &params)
     dice.dice(split);
   }
 
+  if (std::find(hole.begin(), hole.end(), true) != hole.end()) {
+    place_unused_base_verts(hole);
+  }
+
   // TODO: Free subd base data? Or will this break interactive updates?
+}
+
+/* Dicing keeps every base vertex but places only those of faces it dices, so a vertex used by
+ * holes alone would otherwise be left uninitialized and corrupt the mesh bounds. */
+void Mesh::place_unused_base_verts(const vector<bool> &hole)
+{
+  const int num_faces = get_num_subd_faces();
+  const size_t num_base_verts = get_num_subd_base_verts();
+
+  vector<bool> used(num_base_verts, false);
+  for (int f = 0; f < num_faces; f++) {
+    if (hole[f]) {
+      continue;
+    }
+    const SubdFace face = get_subd_face(f);
+    for (int corner = 0; corner < face.num_corners; corner++) {
+      const int vert = subd_face_corners[face.start_corner + corner];
+      if (vert >= 0 && size_t(vert) < num_base_verts) {
+        used[vert] = true;
+      }
+    }
+  }
+
+  const Attribute *subd_attr_P = subd_attributes.find(ATTR_STD_POSITION);
+  Attribute *attr_P = attributes.find(ATTR_STD_POSITION);
+  if (!subd_attr_P || !attr_P) {
+    return;
+  }
+
+  for (int step = 0; step < attr_P->num_motion_steps(); step++) {
+    const int subd_step = step < subd_attr_P->num_motion_steps() ? step : 0;
+    const packed_float3 *cage = subd_attr_P->data<packed_float3>(subd_step);
+    packed_float3 *verts = attr_P->data_for_write<packed_float3>(step);
+    for (size_t vert = 0; vert < num_base_verts; vert++) {
+      if (!used[vert]) {
+        verts[vert] = cage[vert];
+      }
+    }
+  }
 }
 
 CCL_NAMESPACE_END
