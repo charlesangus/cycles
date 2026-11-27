@@ -10,6 +10,8 @@
 #include <pxr/imaging/hd/renderPass.h>
 #include <pxr/usd/sdf/path.h>
 
+#include <array>
+
 HDCYCLES_NAMESPACE_OPEN_SCOPE
 
 class HdCyclesRenderPass final : public PXR_NS::HdRenderPass {
@@ -35,6 +37,9 @@ class HdCyclesRenderPass final : public PXR_NS::HdRenderPass {
   unsigned int _lastSettingsVersion = 0;
   unsigned int _lastSubdivisionVersion = 0;
   PXR_NS::SdfPath _warnedDicingCamera;
+  /* What pixel-space dicing last saw of the dicing camera: its matrix, view plane, full size,
+   * type, field of view and near clip. */
+  std::array<float, 21> _lastDicingView = {};
 };
 
 HDCYCLES_NAMESPACE_CLOSE_SCOPE

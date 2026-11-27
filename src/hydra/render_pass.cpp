@@ -16,7 +16,9 @@
 #endif
 
 #include "scene/camera.h"
+#include "scene/geometry.h"
 #include "scene/integrator.h"
+#include "scene/mesh.h"
 #include "scene/scene.h"
 
 #include "session/session.h"
@@ -24,6 +26,8 @@
 #include <pxr/imaging/hd/changeTracker.h>
 #include <pxr/imaging/hd/renderIndex.h>
 #include <pxr/imaging/hd/renderPassState.h>
+
+#include <cstring>
 
 HDCYCLES_NAMESPACE_OPEN_SCOPE
 
@@ -195,6 +199,36 @@ void HdCyclesRenderPass::_Execute(const HdRenderPassStateSharedPtr &renderPassSt
                                           renderPassState->GetWindowPolicy(),
                                           framing,
                                           dicingCamera);
+    }
+
+    /* Cycles tessellates only meshes that changed, so a mesh diced in pixel space keeps the
+     * tessellation of where the dicing camera was until it is told to dice again. */
+    std::array<float, 21> dicingView;
+    const Transform dicingMatrix = dicingCamera->get_matrix();
+    std::memcpy(dicingView.data(), &dicingMatrix, sizeof(float) * 12);
+    dicingView[12] = dicingCamera->get_viewplane_left();
+    dicingView[13] = dicingCamera->get_viewplane_right();
+    dicingView[14] = dicingCamera->get_viewplane_bottom();
+    dicingView[15] = dicingCamera->get_viewplane_top();
+    dicingView[16] = float(dicingCamera->get_full_width());
+    dicingView[17] = float(dicingCamera->get_full_height());
+    dicingView[18] = float(dicingCamera->get_camera_type());
+    dicingView[19] = dicingCamera->get_fov();
+    dicingView[20] = dicingCamera->get_nearclip();
+    if (dicingView != _lastDicingView) {
+      _lastDicingView = dicingView;
+      for (Geometry *const geom : scene->geometry) {
+        if (!geom->is_mesh()) {
+          continue;
+        }
+        Mesh *const mesh = static_cast<Mesh *>(geom);
+        if (mesh->get_subdivision_type() != Mesh::SUBDIVISION_NONE &&
+            mesh->get_subd_adaptive_space() == Mesh::SUBDIVISION_ADAPTIVE_SPACE_PIXEL)
+        {
+          mesh->tag_subd_dicing_rate_modified();
+          mesh->tag_update(scene, true);
+        }
+      }
     }
 
     if (shutterIsOpen && motionBlur) {
