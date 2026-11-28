@@ -21,6 +21,7 @@
 
 #include "session/session.h"
 
+#include <pxr/imaging/hd/light.h>
 #include <pxr/imaging/hd/renderPassState.h>
 
 HDCYCLES_NAMESPACE_OPEN_SCOPE
@@ -206,13 +207,30 @@ void HdCyclesRenderPass::_MarkCollectionDirty() {}
 // Hydra syncs render passes before rprims, so meshes marked dirty here sync this frame
 void HdCyclesRenderPass::_Sync()
 {
+  HdRenderIndex *const index = GetRenderIndex();
+  HdChangeTracker &tracker = index->GetChangeTracker();
+
+  if (_renderParam->lightLevelsVersion != _lastLightLevelsVersion) {
+    _lastLightLevelsVersion = _renderParam->lightLevelsVersion;
+    // Hydra syncs sprims before render passes, so the lights take the new levels on the next
+    // sync. Natron makes a new engine when a setting changes, which applies it before any sync.
+    for (const TfToken &type : {HdPrimTypeTokens->diskLight,
+                                HdPrimTypeTokens->distantLight,
+                                HdPrimTypeTokens->domeLight,
+                                HdPrimTypeTokens->rectLight,
+                                HdPrimTypeTokens->sphereLight})
+    {
+      for (const SdfPath &id : index->GetSprimSubtree(type, SdfPath::AbsoluteRootPath())) {
+        tracker.MarkSprimDirty(id, HdLight::DirtyParams);
+      }
+    }
+  }
+
   if (_renderParam->subdivisionVersion == _lastSubdivisionVersion) {
     return;
   }
   _lastSubdivisionVersion = _renderParam->subdivisionVersion;
 
-  HdRenderIndex *const index = GetRenderIndex();
-  HdChangeTracker &tracker = index->GetChangeTracker();
   for (const SdfPath &id : index->GetRprimIds()) {
     if (dynamic_cast<const HdCyclesMesh *>(index->GetRprim(id))) {
       tracker.MarkRprimDirty(id, HdChangeTracker::DirtyTopology);

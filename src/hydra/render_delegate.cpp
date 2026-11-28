@@ -532,6 +532,11 @@ HdRenderSettingDescriptorList HdCyclesDelegate::GetRenderSettingDescriptors() co
       HdCyclesRenderSettingsTokens->dicingCamera,
       VtValue(std::string()),
   });
+  descriptors.push_back({
+      "Match Light Levels",
+      HdCyclesRenderSettingsTokens->matchLightLevels,
+      VtValue(true),
+  });
 
   for (const char *nodeName : kSettingsNodes) {
     const Node *const node = GetSettingsNode(scene, nodeName);
@@ -574,6 +579,16 @@ void HdCyclesDelegate::SetRenderSetting(const PXR_NS::TfToken &key, const PXR_NS
     session->params.sample_subset_length = Integrator::MAX_SAMPLES;
     session->params.use_sample_subset = session->params.sample_subset_offset > 0;
     ++_settingsVersion;
+  }
+  else if (key == HdCyclesRenderSettingsTokens->matchLightLevels) {
+    const bool match = value.IsEmpty() ? true :
+                                         VtValue::Cast<bool>(value).GetWithDefault(
+                                             _renderParam->matchLightLevels);
+    if (match != _renderParam->matchLightLevels) {
+      _renderParam->matchLightLevels = match;
+      ++_renderParam->lightLevelsVersion;
+      ++_settingsVersion;
+    }
   }
   else if (key == HdCyclesRenderSettingsTokens->subdivisionSurfaces ||
            key == HdCyclesRenderSettingsTokens->dicingRate ||
@@ -689,6 +704,9 @@ VtValue HdCyclesDelegate::GetRenderSetting(const TfToken &key) const
   }
   if (key == HdCyclesRenderSettingsTokens->dicingCamera) {
     return VtValue(_renderParam->subdivision.dicingCamera.GetString());
+  }
+  if (key == HdCyclesRenderSettingsTokens->matchLightLevels) {
+    return VtValue(_renderParam->matchLightLevels);
   }
 
   Node *node = nullptr;

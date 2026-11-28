@@ -24,7 +24,8 @@ HDCYCLES_NAMESPACE_OPEN_SCOPE
     ((dicingRate, "natron:dicingRate")) \
     ((maxSubdivisionLevel, "natron:maxSubdivisionLevel")) \
     ((adaptiveSpace, "natron:adaptiveSpace")) \
-    ((dicingCamera, "natron:dicingCamera"))
+    ((dicingCamera, "natron:dicingCamera")) \
+    ((matchLightLevels, "natron:matchLightLevels"))
 // clang-format on
 
 TF_DECLARE_PUBLIC_TOKENS(HdCyclesRenderSettingsTokens, HD_CYCLES_RENDER_SETTINGS_TOKENS);

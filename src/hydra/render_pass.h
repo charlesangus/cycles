@@ -34,6 +34,7 @@ class HdCyclesRenderPass final : public PXR_NS::HdRenderPass {
   HdCyclesSession *_renderParam;
   unsigned int _lastSettingsVersion = 0;
   unsigned int _lastSubdivisionVersion = 0;
+  unsigned int _lastLightLevelsVersion = 0;
   PXR_NS::SdfPath _warnedDicingCamera;
 };
 

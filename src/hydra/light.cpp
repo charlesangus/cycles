@@ -88,9 +88,19 @@ void HdCyclesLight::Sync(HdSceneDelegate *sceneDelegate,
     strength *= exp2(GetTypedValue<float>(lightDs, HdLightTokens->exposure, 0.0f));
     strength *= GetTypedValue<float>(lightDs, HdLightTokens->intensity, 1.0f);
 
+    const bool matchLightLevels = static_cast<HdCyclesSession *>(renderParam)->matchLightLevels;
     if (_lightType == HdPrimTypeTokens->distantLight) {
-      /* Unclear why, but approximately matches Karma. */
-      strength *= 4.0f;
+      /* Cycles' sun already gives the UsdLux irradiance, so the 4x makes it 4 times brighter. */
+      if (!matchLightLevels) {
+        strength *= 4.0f;
+      }
+    }
+    else if (_lightType == HdPrimTypeTokens->domeLight) {
+      /* The background takes radiance as it is, so the conversion to radiant flux the other
+       * lights need makes the dome pi too bright. */
+      if (!matchLightLevels) {
+        strength *= M_PI_F;
+      }
     }
     else {
       /* Convert from intensity to radiant flux. */

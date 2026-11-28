@@ -117,6 +117,10 @@ class HdCyclesSession final : public PXR_NS::HdRenderParam {
    * changes that need every mesh's topology synced again. */
   HdCyclesSubdivisionSettings subdivision;
   unsigned int subdivisionVersion = 0;
+  /* Scales the lights to the radiance UsdLux gives them, which Cycles' own units overshoot.
+   * lightLevelsVersion counts the changes that need every light's parameters synced again. */
+  bool matchLightLevels = true;
+  unsigned int lightLevelsVersion = 0;
 
  private:
   const bool _ownCyclesSession;
