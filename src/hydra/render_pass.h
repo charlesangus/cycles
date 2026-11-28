@@ -38,6 +38,9 @@ class HdCyclesRenderPass final : public PXR_NS::HdRenderPass {
 
   /* The frame-relative interval rprims sample motion over: closed without motion blur. */
   PXR_NS::GfVec2f MotionShutter(const PXR_NS::HdCamera *camera) const;
+  /* Turns the integrator's motion blur on or off for rendering through the camera, and returns
+   * whether it is on. */
+  bool SetMotionBlur(CCL_NS::Scene *scene, const PXR_NS::HdCamera *camera) const;
   /* Marks the sampled rprim data dirty when the interval changed, and returns whether it did. */
   bool SetMotionShutter(const PXR_NS::GfVec2f &shutter);
 

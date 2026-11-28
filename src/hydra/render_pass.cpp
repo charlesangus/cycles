@@ -5,7 +5,6 @@
 
 #include "hydra/render_pass.h"
 #include "hydra/camera.h"
-#include "hydra/mesh.h"
 #include "hydra/output_driver.h"
 #include "hydra/render_buffer.h"
 #include "hydra/render_delegate.h"
@@ -128,15 +127,10 @@ void HdCyclesRenderPass::_Execute(const HdRenderPassStateSharedPtr &renderPassSt
     const auto *const camera = static_cast<const HdCyclesCamera *>(renderPassState->GetCamera());
 
     const bool shutterIsOpen = camera && camera->GetShutterOpen() < camera->GetShutterClose();
-    const bool motionBlur = _renderParam->GetMotionBlur().value_or(shutterIsOpen);
+    const bool motionBlur = SetMotionBlur(scene, camera);
     const GfVec2f shutter = MotionShutter(camera);
     const float shutterOpen = shutter[0];
     const float shutterClose = shutter[1];
-
-    if (scene->integrator->get_motion_blur() != motionBlur) {
-      scene->integrator->set_motion_blur(motionBlur);
-      scene->integrator->tag_update(scene, Integrator::UPDATE_NONE);
-    }
 
     /* Rprims sampled their motion over the shutter _Sync took from the published camera. A client
      * that renders through another camera gets them synced again over this one, and this pass
@@ -358,6 +352,17 @@ GfVec2f HdCyclesRenderPass::MotionShutter(const HdCamera *camera) const
   return GfVec2f(float(camera->GetShutterOpen()), float(camera->GetShutterClose()));
 }
 
+bool HdCyclesRenderPass::SetMotionBlur(Scene *scene, const HdCamera *camera) const
+{
+  const bool shutterIsOpen = camera && camera->GetShutterOpen() < camera->GetShutterClose();
+  const bool motionBlur = _renderParam->GetMotionBlur().value_or(shutterIsOpen);
+  if (scene->integrator->get_motion_blur() != motionBlur) {
+    scene->integrator->set_motion_blur(motionBlur);
+    scene->integrator->tag_update(scene, Integrator::UPDATE_NONE);
+  }
+  return motionBlur;
+}
+
 /* A volume reads its velocity only with motion blur on, hence its fields too. */
 bool HdCyclesRenderPass::SetMotionShutter(const GfVec2f &shutter)
 {
@@ -396,8 +401,15 @@ void HdCyclesRenderPass::_Sync()
                                      primaryCamera :
                                      _renderCamera;
   if (!shutterCamera.IsEmpty()) {
-    SetMotionShutter(MotionShutter(
-        dynamic_cast<const HdCamera *>(index->GetSprim(HdPrimTypeTokens->camera, shutterCamera))));
+    const auto *const camera = dynamic_cast<const HdCamera *>(
+        index->GetSprim(HdPrimTypeTokens->camera, shutterCamera));
+    /* A volume adds its velocity field only when it syncs with motion blur already on, and with
+     * the shutter unchanged _Execute would not sync it again once it turns motion blur on. */
+    {
+      const SceneLock lock(_renderParam);
+      SetMotionBlur(lock.scene, camera);
+    }
+    SetMotionShutter(MotionShutter(camera));
   }
 
   if (_renderParam->subdivisionVersion == _lastSubdivisionVersion) {
@@ -405,12 +417,9 @@ void HdCyclesRenderPass::_Sync()
   }
   _lastSubdivisionVersion = _renderParam->subdivisionVersion;
 
-  HdChangeTracker &tracker = index->GetChangeTracker();
-  for (const SdfPath &id : index->GetRprimIds()) {
-    if (dynamic_cast<const HdCyclesMesh *>(index->GetRprim(id))) {
-      tracker.MarkRprimDirty(id, HdChangeTracker::DirtyTopology);
-    }
-  }
+  /* Hydra rejects marking one rprim dirty while it syncs from a scene index, but not marking them
+   * all. Only meshes subdivide, so the others merely sync their topology again. */
+  index->GetChangeTracker().MarkAllRprimsDirty(HdChangeTracker::DirtyTopology);
 }
 
 HDCYCLES_NAMESPACE_CLOSE_SCOPE

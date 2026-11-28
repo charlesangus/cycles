@@ -634,8 +634,7 @@ void HdCyclesMesh::PopulateTopology(HdSceneDelegate *sceneDelegate)
     _geom->tag_smooth_modified();
   }
   else {
-    const HdSubdivisionTagsSchema subdivSchema = HdSubdivisionTagsSchema::GetFromParent(
-        prim.dataSource);
+    const HdSubdivisionTagsSchema subdivSchema = meshSchema.GetSubdivisionTags();
     PxOsdSubdivTags subdivTags;
     if (auto ds = subdivSchema.GetInterpolateBoundary()) {
       subdivTags.SetVertexInterpolationRule(ds->GetTypedValue(0.0f));
