@@ -25,6 +25,7 @@ set(SRC_HD_CYCLES_HEADERS
   camera.h
   config.h
   curves.h
+  dependency_scene_index.h
   field.h
   file_reader.h
   geometry.h
@@ -47,6 +48,7 @@ set(SRC_HD_CYCLES_HEADERS
 set(SRC_HD_CYCLES
   curves.cpp
   camera.cpp
+  dependency_scene_index.cpp
   field.cpp
   file_reader.cpp
   geometry.cpp
