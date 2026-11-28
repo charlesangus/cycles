@@ -7,6 +7,8 @@
 
 #include "hydra/config.h"
 
+#include "util/types_float3.h"
+
 #include <pxr/imaging/hd/dataSource.h>
 #include <pxr/imaging/hd/light.h>
 
@@ -33,6 +35,8 @@ class HdCyclesLight final : public PXR_NS::HdLight {
   CCL_NS::Object *_object = nullptr;
   CCL_NS::Light *_light = nullptr;
   PXR_NS::TfToken _lightType;
+  /* The dome strength lives in its background shader; the light itself keeps unit strength. */
+  CCL_NS::float3 _domeStrength = CCL_NS::make_float3(1.0f);
 };
 
 HDCYCLES_NAMESPACE_CLOSE_SCOPE

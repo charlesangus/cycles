@@ -179,7 +179,15 @@ void HdCyclesLight::Sync(HdSceneDelegate *sceneDelegate,
       strength = zero_float3();
     }
 
-    _light->set_strength(strength);
+    if (_lightType == HdPrimTypeTokens->domeLight) {
+      /* Camera and BSDF rays evaluate only the background shader, while light sampling multiplies
+       * it by the light strength, so the strength goes in the shader alone. */
+      _domeStrength = strength;
+      _light->set_strength(visible ? one_float3() : zero_float3());
+    }
+    else {
+      _light->set_strength(strength);
+    }
     _light->set_is_enabled(visible);
 
     PopulateShaderGraph(lightDs);
@@ -205,8 +213,7 @@ void HdCyclesLight::PopulateShaderGraph(const HdContainerDataSourceHandle &light
 
   if (_lightType == HdPrimTypeTokens->domeLight) {
     BackgroundNode *bgNode = graph->create_node<BackgroundNode>();
-    // Bake strength into shader graph, since only the shader is used for background lights
-    bgNode->set_color(_light->get_strength());
+    bgNode->set_color(_domeStrength);
 
     graph->connect(bgNode->output("Background"), graph->output()->input("Surface"));
 
@@ -250,7 +257,7 @@ void HdCyclesLight::PopulateShaderGraph(const HdContainerDataSourceHandle &light
         if (_lightType == HdPrimTypeTokens->domeLight) {
           VectorMathNode *mathNode = graph->create_node<VectorMathNode>();
           mathNode->set_math_type(NODE_VECTOR_MATH_MULTIPLY);
-          mathNode->set_vector2(_light->get_strength());
+          mathNode->set_vector2(_domeStrength);
 
           graph->connect(blackbodyNode->output("Color"), mathNode->input("Vector1"));
           graph->connect(mathNode->output("Vector"), outputNode->input("Color"));
@@ -332,7 +339,7 @@ void HdCyclesLight::PopulateShaderGraph(const HdContainerDataSourceHandle &light
         else if (_lightType == HdPrimTypeTokens->domeLight) {
           VectorMathNode *mathNode = graph->create_node<VectorMathNode>();
           mathNode->set_math_type(NODE_VECTOR_MATH_MULTIPLY);
-          mathNode->set_vector2(_light->get_strength());
+          mathNode->set_vector2(_domeStrength);
 
           graph->connect(textureNode->output("Color"), mathNode->input("Vector1"));
           graph->connect(mathNode->output("Vector"), outputNode->input("Color"));
