@@ -9,8 +9,6 @@
 #include "hydra/util.h"
 #include "scene/volume.h"
 
-#include <algorithm>
-
 #include <pxr/imaging/hd/volumeFieldBindingSchema.h>
 
 HDCYCLES_NAMESPACE_OPEN_SCOPE
@@ -32,11 +30,6 @@ HdDirtyBits HdCyclesVolume::GetInitialDirtyBitsMask() const
   return bits;
 }
 
-bool HdCyclesVolume::UsesField(const SdfPath &fieldId) const
-{
-  return std::find(_fieldIds.begin(), _fieldIds.end(), fieldId) != _fieldIds.end();
-}
-
 void HdCyclesVolume::Populate(HdSceneDelegate *sceneDelegate, HdDirtyBits dirtyBits, bool &rebuild)
 {
   Scene *const scene = (Scene *)_geom->get_owner();
@@ -45,8 +38,6 @@ void HdCyclesVolume::Populate(HdSceneDelegate *sceneDelegate, HdDirtyBits dirtyB
     const HdSceneIndexPrim prim = GetPrim(sceneDelegate, GetId());
     HdVolumeFieldBindingSchema bindings = HdVolumeFieldBindingSchema::GetFromParent(
         prim.dataSource);
-
-    _fieldIds.clear();
 
     /* The kernel finds a voxel attribute's image slot through the attribute map, which is only
      * rebuilt when an attribute is added or removed. Giving an existing attribute a new handle
@@ -73,9 +64,6 @@ void HdCyclesVolume::Populate(HdSceneDelegate *sceneDelegate, HdDirtyBits dirtyB
       if (auto *const openvdbAsset = static_cast<HdCyclesField *>(
               sceneDelegate->GetRenderIndex().GetBprim(_tokens->openvdbAsset, fieldId)))
       {
-        _fieldIds.push_back(fieldId);
-        openvdbAsset->AddVolume(GetId());
-
         const ustring name(fieldName.GetString());
 
         AttributeStandard std = ATTR_STD_NONE;

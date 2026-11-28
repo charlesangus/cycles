@@ -9,10 +9,6 @@
 #include "scene/image.h"
 
 #include <pxr/imaging/hd/field.h>
-#include <pxr/usd/sdf/path.h>
-
-#include <mutex>
-#include <set>
 
 HDCYCLES_NAMESPACE_OPEN_SCOPE
 
@@ -32,16 +28,8 @@ class HdCyclesField final : public PXR_NS::HdField {
     return _handle;
   }
 
-  /* Called by a volume that binds this field when it syncs, so that a new image for this field
-   * re-syncs it. Volumes sync in parallel. */
-  void AddVolume(const PXR_NS::SdfPath &volumeId);
-
  private:
-  void MarkVolumesDirty(PXR_NS::HdSceneDelegate *sceneDelegate);
-
   CCL_NS::ImageHandle _handle;
-  std::mutex _volumesMutex;
-  std::set<PXR_NS::SdfPath> _volumes;
 };
 
 HDCYCLES_NAMESPACE_CLOSE_SCOPE
